@@ -259,59 +259,100 @@ export async function openDb(url: string, authToken?: string) {
     close: () => client.close(),
     ping: () => read((t) => t.get('SELECT 1 AS ok')),
 
-    loadState: (user: UserPublic | null): Promise<LedgerState> => read(async (t) => {
-      const trips = await t.all<Trip>('SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips ORDER BY start_date DESC, id DESC');
-      const members = await t.all<{ trip_id: Id; person_id: Id }>('SELECT trip_id, person_id FROM trip_members ORDER BY person_id');
+    /** One round trip for everything the client needs; the UI reloads this after every save. */
+    loadState: async (user: UserPublic | null): Promise<LedgerState> => {
+      const owner = user?.role === 'owner';
+      const stmts = [
+        { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips ORDER BY start_date DESC, id DESC' },
+        { sql: 'SELECT trip_id, person_id FROM trip_members ORDER BY person_id' },
+        { sql: 'SELECT * FROM transactions ORDER BY date DESC, id DESC' },
+        { sql: 'SELECT tx_id, person_id, amount, input FROM splits ORDER BY person_id' },
+        { sql: 'SELECT key, value FROM settings' },
+        { sql: 'SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)' },
+        { sql: 'SELECT id, person_id, name, type, currency, opening_balance, archived FROM accounts ORDER BY archived, LOWER(name)' },
+        { sql: 'SELECT * FROM reconciliations ORDER BY date DESC, id DESC' },
+        { sql: 'SELECT * FROM activity ORDER BY id DESC LIMIT 300' },
+        { sql: 'SELECT * FROM shares WHERE revoked = 0 ORDER BY id DESC' },
+        ...(owner ? [{ sql: `SELECT ${USER_COLS} FROM users ORDER BY id` }, { sql: "SELECT * FROM invites WHERE used_at IS NULL AND expires_at > datetime('now') ORDER BY id DESC" }] : []),
+      ];
+      let rs;
+      try {
+        rs = await client.batch(stmts, 'read');
+      } catch (e) {
+        throw friendly(e);
+      }
+      const rows = <T>(i: number): T[] => (rs[i]?.rows ?? []) as unknown as T[];
+      const trips = rows<Trip>(0);
+      const members = rows<{ trip_id: Id; person_id: Id }>(1);
       for (const trip of trips) {
         trip.members = members.filter((m) => m.trip_id === trip.id).map((m) => m.person_id);
         trip.rates = parseRates(trip.rates as unknown);
       }
-      const transactions = await t.all<Tx>('SELECT * FROM transactions ORDER BY date DESC, id DESC');
-      const splits = await t.all<Tx['splits'][number] & { tx_id: Id }>('SELECT tx_id, person_id, amount, input FROM splits ORDER BY person_id');
+      const transactions = rows<Tx>(2);
       const byTx = new Map<Id, Tx['splits']>();
-      for (const s of splits) {
-        let list = byTx.get(s.tx_id);
-        if (!list) byTx.set(s.tx_id, (list = []));
-        list.push({ person_id: s.person_id, amount: s.amount, input: s.input });
+      for (const sp of rows<Tx['splits'][number] & { tx_id: Id }>(3)) {
+        let list = byTx.get(sp.tx_id);
+        if (!list) byTx.set(sp.tx_id, (list = []));
+        list.push({ person_id: sp.person_id, amount: sp.amount, input: sp.input });
       }
       for (const tx of transactions) tx.splits = byTx.get(tx.id) ?? [];
-      const settingRows = await t.all<{ key: string; value: string }>('SELECT key, value FROM settings');
+      const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const state: LedgerState = {
         settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {} },
-        people: await t.all<Person>('SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)'),
-        accounts: await t.all<Account>('SELECT id, person_id, name, type, currency, opening_balance, archived FROM accounts ORDER BY archived, LOWER(name)'),
+        people: rows<Person>(5),
+        accounts: rows<Account>(6),
         trips,
         transactions,
-        reconciliations: await t.all<Reconciliation>('SELECT * FROM reconciliations ORDER BY date DESC, id DESC'),
-        activity: await t.all<Activity>('SELECT * FROM activity ORDER BY id DESC LIMIT 300'),
-        shares: await t.all<Share>('SELECT * FROM shares WHERE revoked = 0 ORDER BY id DESC'),
+        reconciliations: rows<Reconciliation>(7),
+        activity: rows<Activity>(8),
+        shares: rows<Share>(9),
         user,
       };
-      if (user?.role === 'owner') {
-        state.users = await t.all<UserPublic>(`SELECT ${USER_COLS} FROM users ORDER BY id`);
-        state.invites = await t.all<Invite>("SELECT * FROM invites WHERE used_at IS NULL AND expires_at > datetime('now') ORDER BY id DESC");
+      if (owner) {
+        state.users = rows<UserPublic>(10);
+        state.invites = rows<Invite>(11);
       }
       return state;
-    }),
+    },
     /** Read-only view of one trip: no accounts, no personal money movements, no history. */
-    loadSharedState: (tripId: Id): Promise<LedgerState> => read(async (t) => {
-      const trip = await t.get<Trip>('SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips WHERE id = ?', [tripId]);
+    loadSharedState: async (tripId: Id): Promise<LedgerState> => {
+      let rs;
+      try {
+        rs = await client.batch([
+          { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips WHERE id = ?', args: [tripId] },
+          { sql: 'SELECT person_id FROM trip_members WHERE trip_id = ? ORDER BY person_id', args: [tripId] },
+          { sql: "SELECT * FROM transactions WHERE trip_id = ? AND type IN ('expense','refund','repayment') ORDER BY date DESC, id DESC", args: [tripId] },
+          { sql: 'SELECT tx_id, person_id, amount, input FROM splits WHERE tx_id IN (SELECT id FROM transactions WHERE trip_id = ?) ORDER BY person_id', args: [tripId] },
+          { sql: 'SELECT key, value FROM settings' },
+          { sql: 'SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)' },
+        ], 'read');
+      } catch (e) {
+        throw friendly(e);
+      }
+      const rows = <T>(i: number): T[] => (rs[i]?.rows ?? []) as unknown as T[];
+      const trip = rows<Trip>(0)[0];
       if (!trip) throw new HttpError(404, 'This link no longer works');
-      trip.members = (await t.all<{ person_id: Id }>('SELECT person_id FROM trip_members WHERE trip_id = ? ORDER BY person_id', [tripId])).map((m) => m.person_id);
+      trip.members = rows<{ person_id: Id }>(1).map((m) => m.person_id);
       trip.rates = parseRates(trip.rates as unknown);
-      const settingRows = await t.all<{ key: string; value: string }>('SELECT key, value FROM settings');
-      const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
-      const transactions = await t.all<Tx>("SELECT * FROM transactions WHERE trip_id = ? AND type IN ('expense','refund','repayment') ORDER BY date DESC, id DESC", [tripId]);
+      const transactions = rows<Tx>(2);
+      const byTx = new Map<Id, Tx['splits']>();
+      for (const sp of rows<Tx['splits'][number] & { tx_id: Id }>(3)) {
+        let list = byTx.get(sp.tx_id);
+        if (!list) byTx.set(sp.tx_id, (list = []));
+        list.push({ person_id: sp.person_id, amount: sp.amount, input: sp.input });
+      }
       for (const tx of transactions) {
-        tx.splits = await t.all<Tx['splits'][number]>('SELECT person_id, amount, input FROM splits WHERE tx_id = ? ORDER BY person_id', [tx.id]);
+        tx.splits = byTx.get(tx.id) ?? [];
         tx.from_account_id = tx.to_account_id = null;
         tx.from_amount = tx.to_amount = null;
         tx.reference = tx.notes = null;
       }
+      const settingRows = rows<{ key: string; value: string }>(4);
+      const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       return {
         settings: { home_currency: setting('home_currency') ?? trip.currency, rates: parseRates(setting('rates')) ?? {} },
-        people: await t.all<Person>('SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)'),
+        people: rows<Person>(5),
         accounts: [],
         trips: [trip],
         transactions,
@@ -320,7 +361,7 @@ export async function openDb(url: string, authToken?: string) {
         shares: [],
         user: null,
       };
-    }),
+    },
     getSetting: (key: string) => read(async (t) => (await t.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key]))?.value ?? null),
     setSetting: (key: string, value: string) => read((t) => t.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, value])),
 
