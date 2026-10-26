@@ -400,6 +400,7 @@ export async function openDb(url: string, authToken?: string) {
     // --- access ---------------------------------------------------------------------------------
     userCount: () => read(async (t) => (await t.get<{ n: number }>('SELECT COUNT(*) AS n FROM users'))!.n),
     getUser: (id: Id) => read((t) => t.get<UserPublic>(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id])),
+    getUserAuth: (id: Id) => read((t) => t.get<UserRow>(`SELECT ${USER_COLS}, password_hash FROM users WHERE id = ?`, [id])),
     getUserByEmail: (email: string) => read((t) => t.get<UserRow>(`SELECT ${USER_COLS}, password_hash FROM users WHERE email = ?`, [email])),
     createUser: (u: { email: string; name: string; password_hash: string; role: 'owner' | 'member'; person_id: Id | null }, inviteId?: Id) => inTx(async (t) => {
       if (u.role === 'owner' && (await t.get('SELECT 1 FROM users LIMIT 1'))) throw new HttpError(409, 'The owner account already exists');

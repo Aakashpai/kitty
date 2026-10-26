@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type Trip, type UserPublic } from '../engine/index.ts';
 import { HttpError, openDb, type Db } from './db.ts';
-import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, randomToken, readSession, verifyPassword } from './auth.ts';
+import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
 
 interface Ctx {
@@ -107,8 +107,9 @@ export async function createApp(opts: AppOptions) {
   route('POST', '/api/auth/setup', 'public', async (c) => {
     if ((await db.userCount()) > 0) throw new HttpError(409, 'Already set up. Sign in instead.');
     const me = await ownerPerson();
-    const user = await db.createUser({ email: email(c.body.email), name: str(c.body.name, 'Name'), password_hash: await hashPassword(password(c.body.password)), role: 'owner', person_id: me.id });
-    setSessionCookie(c, createSession(secret, user.id));
+    const password_hash = await hashPassword(password(c.body.password));
+    const user = await db.createUser({ email: email(c.body.email), name: str(c.body.name, 'Name'), password_hash, role: 'owner', person_id: me.id });
+    setSessionCookie(c, createSession(secret, user.id, passwordFingerprint(password_hash)));
     return { user };
   });
   route('POST', '/api/auth/login', 'public', async (c) => {
@@ -120,7 +121,7 @@ export async function createApp(opts: AppOptions) {
       throw new HttpError(401, 'Wrong email or password');
     }
     limiter.reset(ip);
-    setSessionCookie(c, createSession(secret, u.id));
+    setSessionCookie(c, createSession(secret, u.id, passwordFingerprint(u.password_hash)));
     const { password_hash: _ph, ...user } = u;
     return { user };
   });
@@ -128,7 +129,9 @@ export async function createApp(opts: AppOptions) {
   route('POST', '/api/auth/password', 'user', async (c) => {
     const u = await db.getUserByEmail(c.user!.email);
     if (!u || !(await verifyPassword(String(c.body.current ?? ''), u.password_hash))) throw new HttpError(400, 'Current password is wrong');
-    await db.setPassword(u.id, await hashPassword(password(c.body.next)));
+    const password_hash = await hashPassword(password(c.body.next));
+    await db.setPassword(u.id, password_hash);
+    setSessionCookie(c, createSession(secret, u.id, passwordFingerprint(password_hash)));
     return { ok: true };
   });
 
@@ -146,8 +149,9 @@ export async function createApp(opts: AppOptions) {
   route('POST', '/api/invites/:token/accept', 'public', async (c) => {
     const inv = await db.getInvite(c.params.token ?? '');
     if (!inv) throw new HttpError(410, 'This invite link has expired or was already used.');
-    const user = await db.createUser({ email: email(c.body.email), name: str(c.body.name ?? inv.person_name, 'Name'), password_hash: await hashPassword(password(c.body.password)), role: 'member', person_id: inv.person_id }, inv.id);
-    setSessionCookie(c, createSession(secret, user.id));
+    const password_hash = await hashPassword(password(c.body.password));
+    const user = await db.createUser({ email: email(c.body.email), name: str(c.body.name ?? inv.person_name, 'Name'), password_hash, role: 'member', person_id: inv.person_id }, inv.id);
+    setSessionCookie(c, createSession(secret, user.id, passwordFingerprint(password_hash)));
     return { user };
   });
   route('DELETE', '/api/users/:id', 'owner', async (c) => {
@@ -241,7 +245,8 @@ export async function createApp(opts: AppOptions) {
         const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
         if (!r) return send(404, { error: 'Not found' });
         const session = readSession(secret, parseCookies(req.headers.cookie)[COOKIE]);
-        const user = session ? ((await db.getUser(session.uid)) ?? null) : null;
+        const row = session ? await db.getUserAuth(session.uid) : undefined;
+        const user: UserPublic | null = row && passwordFingerprint(row.password_hash) === session!.fp ? (({ password_hash: _p, ...pub }) => pub)(row) : null;
         if (r.access !== 'public' && !user) return send(401, { error: 'Sign in to continue', code: 'unauthenticated' });
         if (r.access === 'owner' && user?.role !== 'owner') return send(403, { error: 'Only the owner can do that' });
         const m = r.re.exec(url.pathname)!;

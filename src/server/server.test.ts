@@ -210,7 +210,8 @@ test('backup and restore into a fresh deployment keeps data and logins', async (
     assert.deepEqual(s3.transactions, s2.transactions);
     assert.deepEqual(s3.accounts, s2.accounts);
     assert.equal(s3.settings.home_currency, 'SGD');
-    assert.equal((await o.call('POST', '/api/restore', { nope: 1 })).status, 400);
+    assert.equal((await o.call('GET', '/api/state')).status, 401, 'the pre-restore owner session is gone with its user row');
+    assert.equal((await back.call('POST', '/api/restore', { nope: 1 })).status, 400);
   } finally {
     other.server.close();
     other.db.close();
@@ -251,7 +252,11 @@ test('owner can be provisioned from configuration and can change their password'
     assert.equal(s.people.find((p) => p.is_me)?.name, 'Aakash');
     assert.equal((await j.call('POST', '/api/auth/password', { current: 'wrong', next: 'brand-new-pass' })).status, 400);
     assert.equal((await j.call('POST', '/api/auth/password', { current: 'kitty-pass', next: 'short' })).status, 400);
+    const other = jar(base);
+    await other.ok('POST', '/api/auth/login', { email: 'aakash@example.com', password: 'kitty-pass' });
     await j.ok('POST', '/api/auth/password', { current: 'kitty-pass', next: 'brand-new-pass' });
+    assert.equal((await j.call('GET', '/api/state')).status, 200, 'the device that changed the password stays signed in');
+    assert.equal((await other.call('GET', '/api/state')).status, 401, 'every other session is signed out by a password change');
     await j.ok('POST', '/api/auth/logout');
     assert.equal((await j.call('POST', '/api/auth/login', { email: 'aakash@example.com', password: 'kitty-pass' })).status, 401);
     await j.ok('POST', '/api/auth/login', { email: 'aakash@example.com', password: 'brand-new-pass' });

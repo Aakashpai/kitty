@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 
 const scrypt = (pw: string, salt: Buffer) => new Promise<Buffer>((res, rej) => scryptCb(pw, salt, 64, (e, k) => (e ? rej(e) : res(k))));
 
@@ -20,22 +20,25 @@ export const randomToken = (bytes = 24) => randomBytes(bytes).toString('base64ur
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64url');
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('base64url');
 
-/** Stateless session: base64url(JSON) + "." + HMAC. Revoked implicitly when the user row disappears. */
-export function createSession(secret: string, uid: number, days = 30): string {
-  const body = b64(JSON.stringify({ uid, exp: Date.now() + days * 86_400_000 }));
+/** Short fingerprint of the password hash; baked into sessions so a password change signs every device out. */
+export const passwordFingerprint = (passwordHash: string) => createHash('sha256').update(passwordHash).digest('base64url').slice(0, 16);
+
+/** Stateless session: base64url(JSON) + "." + HMAC. Dies when the user is removed or changes their password. */
+export function createSession(secret: string, uid: number, fp: string, days = 30): string {
+  const body = b64(JSON.stringify({ uid, fp, exp: Date.now() + days * 86_400_000 }));
   return `${body}.${sign(secret, body)}`;
 }
 
-export function readSession(secret: string, cookie: string | undefined): { uid: number } | null {
+export function readSession(secret: string, cookie: string | undefined): { uid: number; fp: string } | null {
   if (!cookie) return null;
   const [body, sig] = cookie.split('.');
   if (!body || !sig) return null;
   const expected = sign(secret, body);
   if (expected.length !== sig.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) return null;
   try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { uid?: unknown; exp?: unknown };
-    if (typeof payload.uid !== 'number' || typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
-    return { uid: payload.uid };
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { uid?: unknown; fp?: unknown; exp?: unknown };
+    if (typeof payload.uid !== 'number' || typeof payload.fp !== 'string' || typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
+    return { uid: payload.uid, fp: payload.fp };
   } catch {
     return null;
   }
