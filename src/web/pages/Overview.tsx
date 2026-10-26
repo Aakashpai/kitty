@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, Plus } from 'lucide-react';
-import { formatAmount, pairwiseDebts, shareOf, computeBalances, spendingBy, type Tx } from '../../engine/index.ts';
+import { computeHomeBalances, formatAmount, pairwiseDebts, shareOf, computeBalances, spendingBy, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
@@ -31,7 +31,7 @@ function Bars({ data, currency }: { data: { key: string; label: string; value: n
 
 export function Overview() {
   const l = useLedger();
-  const { state, me, balances, reload, who } = l;
+  const { state, me, balances, reload, who, rateCtx } = l;
   const openForm = useTxForm();
   const [selected, setSelected] = useState<number | null>(null);
   const [cur, setCur] = useState<string | null>(null);
@@ -44,6 +44,14 @@ export function Overview() {
     if (d.to === me.id) addTo(owed, d.currency, d.amount);
     if (d.from === me.id) addTo(owe, d.currency, d.amount);
   }
+  const hb = computeHomeBalances(state.transactions, rateCtx);
+  let owedHome = 0, oweHome = 0;
+  for (const d of pairwiseDebts(hb)) {
+    if (d.to === me.id) owedHome += d.amount;
+    if (d.from === me.id) oweHome += d.amount;
+  }
+  const foreignDebts = pairwiseDebts(balances).some((d) => d.currency !== rateCtx.home);
+  const homeFoot = (v: number) => (foreignDebts && v ? `≈ ${formatAmount(v, rateCtx.home)}${hb.unconverted.size ? ' + unconverted' : ''}` : undefined);
   const month = new Date().toISOString().slice(0, 7);
   const monthShare = new Map<string, number>();
   for (const tx of state.transactions) if (tx.date.startsWith(month)) addTo(monthShare, tx.currency, shareOf(tx, me.id));
@@ -105,8 +113,8 @@ export function Overview() {
         <button className="primary" onClick={() => openForm()}><Plus />Add transaction</button>
       </div>
       <div className="grid-4">
-        <Stat label="You are owed" icon={ArrowDownLeft}><MoneyList map={owed} empty="Nothing" /></Stat>
-        <Stat label="You owe" icon={ArrowUpRight}><MoneyList map={owe} empty="Nothing" /></Stat>
+        <Stat label="You are owed" icon={ArrowDownLeft} foot={homeFoot(owedHome)}><MoneyList map={owed} empty="Nothing" /></Stat>
+        <Stat label="You owe" icon={ArrowUpRight} foot={homeFoot(oweHome)}><MoneyList map={owe} empty="Nothing" /></Stat>
         <Stat label="Your spending this month" icon={CalendarDays}><MoneyList map={monthShare} empty="Nothing yet" /></Stat>
         <Stat label="Cash on hand" icon={Banknote}><MoneyList map={cashByCur} empty="No cash holdings" /></Stat>
       </div>

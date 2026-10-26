@@ -126,7 +126,21 @@ const MIGRATIONS: string[] = [
     revoked INTEGER NOT NULL DEFAULT 0
   );
   `,
+  `
+  ALTER TABLE trips ADD COLUMN rates TEXT;
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('rates', '{}');
+  `,
 ];
+
+const parseRates = (v: unknown): Record<string, number> | null => {
+  if (typeof v !== 'string' || !v) return null;
+  try {
+    const o = JSON.parse(v) as Record<string, number>;
+    return o && typeof o === 'object' && Object.keys(o).length ? o : null;
+  } catch {
+    return null;
+  }
+};
 
 export class HttpError extends Error {
   status: number;
@@ -246,9 +260,12 @@ export async function openDb(url: string, authToken?: string) {
     ping: () => read((t) => t.get('SELECT 1 AS ok')),
 
     loadState: (user: UserPublic | null): Promise<LedgerState> => read(async (t) => {
-      const trips = await t.all<Trip>('SELECT id, name, start_date, end_date, currency, notes, archived FROM trips ORDER BY start_date DESC, id DESC');
+      const trips = await t.all<Trip>('SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips ORDER BY start_date DESC, id DESC');
       const members = await t.all<{ trip_id: Id; person_id: Id }>('SELECT trip_id, person_id FROM trip_members ORDER BY person_id');
-      for (const trip of trips) trip.members = members.filter((m) => m.trip_id === trip.id).map((m) => m.person_id);
+      for (const trip of trips) {
+        trip.members = members.filter((m) => m.trip_id === trip.id).map((m) => m.person_id);
+        trip.rates = parseRates(trip.rates as unknown);
+      }
       const transactions = await t.all<Tx>('SELECT * FROM transactions ORDER BY date DESC, id DESC');
       const splits = await t.all<Tx['splits'][number] & { tx_id: Id }>('SELECT tx_id, person_id, amount, input FROM splits ORDER BY person_id');
       const byTx = new Map<Id, Tx['splits']>();
@@ -258,8 +275,10 @@ export async function openDb(url: string, authToken?: string) {
         list.push({ person_id: s.person_id, amount: s.amount, input: s.input });
       }
       for (const tx of transactions) tx.splits = byTx.get(tx.id) ?? [];
+      const settingRows = await t.all<{ key: string; value: string }>('SELECT key, value FROM settings');
+      const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const state: LedgerState = {
-        settings: { home_currency: (await t.get<{ value: string }>("SELECT value FROM settings WHERE key = 'home_currency'"))?.value ?? 'USD' },
+        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {} },
         people: await t.all<Person>('SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)'),
         accounts: await t.all<Account>('SELECT id, person_id, name, type, currency, opening_balance, archived FROM accounts ORDER BY archived, LOWER(name)'),
         trips,
@@ -277,9 +296,12 @@ export async function openDb(url: string, authToken?: string) {
     }),
     /** Read-only view of one trip: no accounts, no personal money movements, no history. */
     loadSharedState: (tripId: Id): Promise<LedgerState> => read(async (t) => {
-      const trip = await t.get<Trip>('SELECT id, name, start_date, end_date, currency, notes, archived FROM trips WHERE id = ?', [tripId]);
+      const trip = await t.get<Trip>('SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips WHERE id = ?', [tripId]);
       if (!trip) throw new HttpError(404, 'This link no longer works');
       trip.members = (await t.all<{ person_id: Id }>('SELECT person_id FROM trip_members WHERE trip_id = ? ORDER BY person_id', [tripId])).map((m) => m.person_id);
+      trip.rates = parseRates(trip.rates as unknown);
+      const settingRows = await t.all<{ key: string; value: string }>('SELECT key, value FROM settings');
+      const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const transactions = await t.all<Tx>("SELECT * FROM transactions WHERE trip_id = ? AND type IN ('expense','refund','repayment') ORDER BY date DESC, id DESC", [tripId]);
       for (const tx of transactions) {
         tx.splits = await t.all<Tx['splits'][number]>('SELECT person_id, amount, input FROM splits WHERE tx_id = ? ORDER BY person_id', [tx.id]);
@@ -288,7 +310,7 @@ export async function openDb(url: string, authToken?: string) {
         tx.reference = tx.notes = null;
       }
       return {
-        settings: { home_currency: trip.currency },
+        settings: { home_currency: setting('home_currency') ?? trip.currency, rates: parseRates(setting('rates')) ?? {} },
         people: await t.all<Person>('SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)'),
         accounts: [],
         trips: [trip],
@@ -341,13 +363,13 @@ export async function openDb(url: string, authToken?: string) {
     }),
 
     createTrip: (tr: Omit<Trip, 'id'>) => inTx(async (t) => {
-      const row = (await t.get<{ id: number }>('INSERT INTO trips (name, start_date, end_date, currency, notes, archived) VALUES (?, ?, ?, ?, ?, ?) RETURNING id', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived]))!;
+      const row = (await t.get<{ id: number }>('INSERT INTO trips (name, start_date, end_date, currency, notes, archived, rates) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null]))!;
       for (const m of tr.members) await t.run('INSERT INTO trip_members (trip_id, person_id) VALUES (?, ?)', [row.id, m]);
       await logIn(t, 'create', 'trip', row.id, `Created trip ${tr.name}`);
       return { ...tr, id: row.id };
     }),
     updateTrip: (id: Id, tr: Omit<Trip, 'id'>) => inTx(async (t) => {
-      if (!(await t.run('UPDATE trips SET name = ?, start_date = ?, end_date = ?, currency = ?, notes = ?, archived = ? WHERE id = ?', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, id])).changes) throw new HttpError(404, 'Trip not found');
+      if (!(await t.run('UPDATE trips SET name = ?, start_date = ?, end_date = ?, currency = ?, notes = ?, archived = ?, rates = ? WHERE id = ?', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, id])).changes) throw new HttpError(404, 'Trip not found');
       await t.run('DELETE FROM trip_members WHERE trip_id = ?', [id]);
       for (const m of tr.members) await t.run('INSERT INTO trip_members (trip_id, person_id) VALUES (?, ?)', [id, m]);
       await logIn(t, 'update', 'trip', id, `Updated trip ${tr.name}`);

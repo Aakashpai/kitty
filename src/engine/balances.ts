@@ -1,5 +1,6 @@
 import type { Account, Id, Tx } from './types.ts';
-import { effectsOf, type Debt } from './effects.ts';
+import { conversionOf, effectsOf, type Debt, type RateCtx } from './effects.ts';
+import { allocate } from './money.ts';
 
 export interface Balances {
   /** account_id -> balance in the account's currency (opening balance + every delta) */
@@ -33,6 +34,55 @@ export function computeBalances(txs: Tx[], accounts: Account[] = []): Balances {
       addNet(d.to, d.currency, d.amount);
       addNet(d.from, d.currency, -d.amount);
     }
+  }
+  return b;
+}
+
+export interface HomeBalances extends Balances {
+  home: string;
+  actual: number; // converted at real charges (minor units of home)
+  estimated: number; // converted at table rates
+  unconverted: Map<string, number>; // debt amounts with no known rate, per currency
+}
+
+/**
+ * Who owes whom in the home currency. Shares of an expense with a real home-currency charge
+ * are allocated from that charge (so they sum to it exactly); everything else uses the rate
+ * table; debts with no rate are reported separately instead of guessed.
+ */
+export function computeHomeBalances(txs: Tx[], c: RateCtx): HomeBalances {
+  const b: HomeBalances = { accounts: new Map(), pair: new Map(), net: new Map(), home: c.home, actual: 0, estimated: 0, unconverted: new Map() };
+  const addNet = (p: Id, v: number) => {
+    let m = b.net.get(p);
+    if (!m) b.net.set(p, (m = new Map()));
+    addTo(m, c.home, v);
+  };
+  for (const tx of txs) {
+    const debts = effectsOf(tx).debts;
+    if (!debts.length) continue;
+    const conv = conversionOf(tx, c);
+    if (!conv) {
+      for (const d of debts) addTo(b.unconverted, d.currency, d.amount);
+      continue;
+    }
+    let converted: number[];
+    const leg = tx.from_amount ?? tx.to_amount;
+    if (conv.kind === 'actual' && (tx.type === 'expense' || tx.type === 'refund') && leg != null && tx.splits.length) {
+      const parts = allocate(leg, tx.splits.map((s) => s.amount));
+      const byPerson = new Map(tx.splits.map((s, i) => [s.person_id, parts[i] ?? 0]));
+      converted = debts.map((d) => byPerson.get(tx.type === 'expense' ? d.from : d.to) ?? 0);
+    } else {
+      converted = debts.map((d) => Math.round(d.amount * conv.rate));
+    }
+    debts.forEach((d, i) => {
+      const v = converted[i] ?? 0;
+      if (conv.kind === 'rate') b.estimated += v;
+      else if (conv.kind === 'actual') b.actual += v;
+      const [p, q, sign] = d.from < d.to ? [d.from, d.to, 1] : [d.to, d.from, -1];
+      addTo(b.pair, `${p}|${q}|${c.home}`, sign * v);
+      addNet(d.to, v);
+      addNet(d.from, -v);
+    });
   }
   return b;
 }

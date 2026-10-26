@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { Database, Download, Upload } from 'lucide-react';
-import { effectsOf, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
+import { effectsOf, formatAmount, homeValue, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
 import { ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
@@ -54,7 +54,7 @@ function GroupTable({ title, groups, note }: { title: string; groups: Map<string
 }
 
 export function Reports() {
-  const { state, me, who, accountName, trips, reload } = useLedger();
+  const { state, me, who, accountName, trips, reload, rateCtx } = useLedger();
   const [scope, setScope] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -78,6 +78,16 @@ export function Reports() {
       if (!byPerson.has(k)) byPerson.set(k, new Map());
       addTo(byPerson.get(k)!, tx.currency, shareOf(tx, s.person_id));
     }
+  }
+  let homeActual = 0, homeEstimated = 0;
+  const homeUnconverted = new Map<string, number>();
+  for (const tx of txs) {
+    if (tx.type !== 'expense' && tx.type !== 'refund') continue;
+    const sign = tx.type === 'expense' ? 1 : -1;
+    const v = homeValue(tx, rateCtx);
+    if (!v) addTo(homeUnconverted, tx.currency, sign * tx.amount);
+    else if (v.kind === 'rate') homeEstimated += sign * v.amount;
+    else homeActual += sign * v.amount;
   }
   const byCategory = spendingBy(txs, (t) => t.category || 'Uncategorised');
   const byTrip = spendingBy(txs, (t) => (t.trip_id != null ? (trips.get(t.trip_id)?.name ?? '?') : 'Personal (no trip)'));
@@ -136,6 +146,9 @@ export function Reports() {
         <Stat label="Your share"><MoneyList map={mine} empty="—" /></Stat>
         <Stat label="Transfer & ATM fees" foot="Kept out of spending"><MoneyList map={fees} empty="—" /></Stat>
         <Stat label="Income"><MoneyList map={income} empty="—" /></Stat>
+        <Stat label={`Spending in ${rateCtx.home}`} foot={`${formatAmount(homeActual, rateCtx.home)} at real charges · ${formatAmount(homeEstimated, rateCtx.home)} at set rates${homeUnconverted.size ? ` · unconverted: ${[...homeUnconverted].map(([c, v]) => formatAmount(v, c)).join(', ')}` : ''}`} testId="home-spend">
+          {formatAmount(homeActual + homeEstimated, rateCtx.home)}
+        </Stat>
       </div>
       <div className="grid-2">
         <GroupTable title="By category" groups={byCategory} note="Expenses minus linked refunds." />

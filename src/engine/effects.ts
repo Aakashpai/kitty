@@ -1,4 +1,4 @@
-import type { Id, Tx } from './types.ts';
+import type { Account, Id, Trip, Tx } from './types.ts';
 
 /**
  * What a single transaction does to the ledger. Everything else (account balances, who owes
@@ -81,6 +81,49 @@ export function effectsOf(tx: Tx): Effects {
       break;
   }
   return e;
+}
+
+/**
+ * Conversion rules into the home currency, in priority order:
+ *  1. same currency: 1:1
+ *  2. the transaction carries an actual home-currency leg (a card charged in INR for an SGD
+ *     expense, or ₹2,000 paid to settle an SGD debt): that real rate is used ("actual")
+ *  3. the trip's rate table, then the global rate table ("rate", an estimate)
+ *  4. otherwise null: the amount stays unconverted and the UI says so.
+ */
+export interface RateCtx {
+  home: string;
+  rates: Record<string, number>;
+  trips: Trip[];
+  accounts: Account[];
+}
+export interface Conversion {
+  rate: number;
+  kind: 'same' | 'actual' | 'rate';
+}
+
+/** Currency the transaction's balance effect is denominated in. */
+export const debtCurrencyOf = (tx: Tx): string => (tx.type === 'repayment' ? (tx.settled_currency ?? tx.currency) : tx.currency);
+
+export function conversionOf(tx: Tx, c: RateCtx): Conversion | null {
+  const cur = debtCurrencyOf(tx);
+  if (cur === c.home) return { rate: 1, kind: 'same' };
+  if (tx.type === 'repayment' && tx.currency === c.home && tx.settled_amount) return { rate: tx.amount / tx.settled_amount, kind: 'actual' };
+  const acct = (id: Id | null) => (id == null ? undefined : c.accounts.find((a) => a.id === id));
+  for (const [a, amt] of [[acct(tx.from_account_id), tx.from_amount], [acct(tx.to_account_id), tx.to_amount]] as [Account | undefined, number | null][]) {
+    if (a && a.currency === c.home && amt != null && amt > 0 && tx.amount > 0) return { rate: amt / tx.amount, kind: 'actual' };
+  }
+  const trip = tx.trip_id != null ? c.trips.find((t) => t.id === tx.trip_id) : undefined;
+  const r = trip?.rates?.[cur] ?? c.rates[cur];
+  return r != null && Number.isFinite(r) && r > 0 ? { rate: r, kind: 'rate' } : null;
+}
+
+/** The transaction amount in the home currency, or null when no conversion is known. */
+export function homeValue(tx: Tx, c: RateCtx): { amount: number; kind: Conversion['kind'] } | null {
+  const conv = conversionOf(tx, c);
+  if (!conv) return null;
+  const base = tx.type === 'repayment' ? (tx.settled_amount ?? tx.amount) : tx.amount;
+  return { amount: Math.round(base * conv.rate), kind: conv.kind };
 }
 
 /** Signed share of `person` in an expense (+) or refund (-); 0 for other types. */

@@ -5,6 +5,7 @@ import { api, errorText } from '../api.ts';
 import { COMMON_CURRENCIES, useLedger } from '../store.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { DangerButton, Empty, ErrorBox, Field, Modal, Money, Spinner, Stat, TypeBadge, fmtDate, useBusy } from '../components/ui.tsx';
+import { RatesEditor } from '../components/RatesEditor.tsx';
 
 const ACCOUNT_ICON: Record<Account['type'], LucideIcon> = { cash: Banknote, bank: Landmark, card: CreditCard, wallet: Wallet, other: Coins };
 const typeLabel = (t: Account['type']) => (t === 'cash' ? 'Cash holding' : t[0]!.toUpperCase() + t.slice(1));
@@ -117,14 +118,16 @@ export function Accounts({ id }: { id: number | null }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
   const [home, setHome] = useState(state.settings.home_currency);
+  const [ratesDraft, setRatesDraft] = useState<Record<string, number> | null>(Object.keys(state.settings.rates ?? {}).length ? state.settings.rates : null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, run] = useBusy();
   const account = id != null ? accounts.get(id) : undefined;
+  const settingsDirty = home !== state.settings.home_currency || JSON.stringify(ratesDraft ?? {}) !== JSON.stringify(state.settings.rates ?? {});
   if (id != null && !account) return <Empty title="Account not found"><a href="#/accounts">Back</a></Empty>;
   if (account) return <AccountDetail account={account} />;
   const saveHome = () => run(async () => {
     try {
-      await api('PUT', '/api/settings', { home_currency: home });
+      await api('PUT', '/api/settings', { home_currency: home, rates: ratesDraft ?? {} });
       await reload();
       setErr(null);
     } catch (e) {
@@ -170,14 +173,18 @@ export function Accounts({ id }: { id: number | null }) {
           </table>
         </div>
       )}
-      <div className="panel pad">
-        <h3>Home currency</h3>
-        <div className="row" style={{ marginTop: 8 }}>
+      <div className="panel pad stack">
+        <div>
+          <h3>Home currency & exchange rates</h3>
+          <p className="faint small" style={{ marginTop: 4 }}>Balances are always kept in the currency they were incurred in. The rates below only power the “In {home}” view: card charges that already carry an {home} amount use that real figure; everything else (cash, hand-overs, repayments) uses these rates as an estimate. A trip can override them.</p>
+        </div>
+        <div className="row">
+          <span className="field-label">Home currency</span>
           <input list="currencies" value={home} maxLength={3} style={{ width: 96 }} onChange={(e) => setHome(e.target.value.toUpperCase())} data-testid="home-currency" />
           <datalist id="currencies">{COMMON_CURRENCIES.map((c) => <option key={c} value={c} />)}</datalist>
-          <button onClick={() => void saveHome()} disabled={busy || home === state.settings.home_currency}>{busy && <Spinner />}Save</button>
-          <span className="faint small">Default for new accounts and personal transactions. Nothing is ever converted automatically.</span>
         </div>
+        <RatesEditor value={ratesDraft} onChange={setRatesDraft} home={home} testId="global-rates" />
+        <div><button className="primary" onClick={() => void saveHome()} disabled={busy || !settingsDirty} data-testid="save-settings">{busy && <Spinner />}Save</button></div>
       </div>
       {creating && <AccountForm onClose={() => setCreating(false)} />}
       {editing && <AccountForm existing={editing} onClose={() => setEditing(null)} />}

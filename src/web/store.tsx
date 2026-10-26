@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type Trip, type UserPublic } from '../engine/index.ts';
+import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type RateCtx, type Trip, type UserPublic } from '../engine/index.ts';
 import { api, errorText } from './api.ts';
 import { Login, Setup } from './pages/Auth.tsx';
 
@@ -13,6 +13,7 @@ export interface Ledger {
   accounts: Map<Id, Account>;
   trips: Map<Id, Trip>;
   balances: Balances; // overall, every transaction
+  rateCtx: RateCtx; // how foreign amounts convert into the home currency
   who: (id: Id | null | undefined) => string; // "You" / name
   accountName: (id: Id | null | undefined) => string;
   logout: () => Promise<void>;
@@ -147,6 +148,7 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
       accounts,
       trips,
       balances: computeBalances(state.transactions, state.accounts),
+      rateCtx: { home: state.settings.home_currency, rates: state.settings.rates ?? {}, trips: state.trips, accounts: state.accounts },
       who: (id) => (id == null ? '—' : id === me.id && !readOnly ? 'You' : (people.get(id)?.name ?? `#${id}`)),
       accountName: (id) => (id == null ? '—' : (accounts.get(id)?.name ?? `#${id}`)),
       logout: async () => {

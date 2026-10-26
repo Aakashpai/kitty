@@ -34,6 +34,7 @@ export interface Trip {
   notes: string | null;
   archived: 0 | 1;
   members: Id[];
+  rates: Record<string, number> | null; // optional overrides: units of home currency per 1 unit of this currency
 }
 
 export interface Split {
@@ -117,6 +118,7 @@ export interface LedgerCtx {
 
 export interface Settings {
   home_currency: string;
+  rates: Record<string, number>; // e.g. { SGD: 75, MYR: 24.5 } = home-currency value of one unit
 }
 
 export interface UserPublic {

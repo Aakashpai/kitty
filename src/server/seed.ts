@@ -20,8 +20,8 @@ export async function seed(db: Db) {
   const card = await acct('HDFC Credit Card', 'card', 'INR');
   const inrCash = await acct('INR Cash', 'cash', 'INR', 500_000);
   const sgdCash = await acct('SGD Cash', 'cash', 'SGD');
-  const goa = (await db.createTrip({ name: 'Goa weekend', start_date: day(95), end_date: day(93), currency: 'INR', notes: null, archived: 0, members: [me, alice, bob] })).id;
-  const sg = (await db.createTrip({ name: `Singapore ${year}`, start_date: day(40), end_date: day(36), currency: 'SGD', notes: 'Marina Bay + Sentosa', archived: 0, members: [me, alice, bob, cara] })).id;
+  const goa = (await db.createTrip({ name: 'Goa weekend', start_date: day(95), end_date: day(93), currency: 'INR', notes: null, archived: 0, members: [me, alice, bob], rates: null })).id;
+  const sg = (await db.createTrip({ name: `Singapore ${year}`, start_date: day(40), end_date: day(36), currency: 'SGD', notes: 'Marina Bay + Sentosa', archived: 0, members: [me, alice, bob, cara], rates: { SGD: 62.5 } })).id;
 
   const add = (p: Partial<TxInput>) => db.createTx({ ...emptyTx(), ...p } as TxInput);
   const all4 = [me, alice, bob, cara];

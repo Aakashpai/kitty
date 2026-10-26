@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Banknote, ChevronLeft, Copy, Link2, Pencil, Plus, Trash2 } from 'lucide-react';
-import { computeBalances, shareOf, spendingBy, type Id, type Share, type Trip, type Tx } from '../../engine/index.ts';
+import { computeBalances, formatAmount, shareOf, spendingBy, type Id, type Share, type Trip, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
@@ -9,12 +9,14 @@ import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
+import { RatesEditor } from '../components/RatesEditor.tsx';
+import { computeHomeBalances } from '../../engine/index.ts';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
 
 function TripForm({ existing, onClose }: { existing?: Trip; onClose: () => void }) {
   const { state, me, reload } = useLedger();
-  const [t, setT] = useState<Omit<Trip, 'id'>>(existing ?? { name: '', start_date: null, end_date: null, currency: state.settings.home_currency, notes: null, archived: 0, members: [me.id] });
+  const [t, setT] = useState<Omit<Trip, 'id'>>(existing ?? { name: '', start_date: null, end_date: null, currency: state.settings.home_currency, notes: null, archived: 0, members: [me.id], rates: null });
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const toggle = (id: Id) => setT((x) => ({ ...x, members: x.members.includes(id) ? x.members.filter((m) => m !== id) : [...x.members, id] }));
@@ -53,6 +55,13 @@ function TripForm({ existing, onClose }: { existing?: Trip; onClose: () => void 
           </div>
           <span className="hint">Add more friends under People; members can change any time.</span>
         </div>
+        <details open={!!t.rates}>
+          <summary>Exchange rates for this trip (optional)</summary>
+          <div className="stack tight" style={{ marginTop: 8 }}>
+            <span className="hint">Overrides the default rates from Accounts & Cash for this trip only. Card charges recorded in {state.settings.home_currency} are always used as-is.</span>
+            <RatesEditor value={t.rates} onChange={(r) => setT({ ...t, rates: r })} home={state.settings.home_currency} testId="trip-rates" />
+          </div>
+        </details>
         {existing && <label className="check"><input type="checkbox" checked={!!t.archived} onChange={(e) => setT({ ...t, archived: e.target.checked ? 1 : 0 })} /><span>Archived (hidden from pickers)</span></label>}
         <ErrorBox error={err} />
         <div className="row end">
@@ -155,7 +164,7 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
 
 /** Everything about one trip: members, totals, transactions, balances, per-person. Also used by shared read-only links. */
 export function TripView({ trip }: { trip: Trip }) {
-  const { state, me, who, people, readOnly } = useLedger();
+  const { state, me, who, people, readOnly, rateCtx } = useLedger();
   const [tab, setTab] = useState<'transactions' | 'balances' | 'people'>('transactions');
   const [selected, setSelected] = useState<number | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
@@ -166,6 +175,9 @@ export function TripView({ trip }: { trip: Trip }) {
   const fees = new Map<string, number>();
   for (const tx of txs) if (tx.fee_amount) addTo(fees, tx.currency, tx.fee_amount);
   const b = computeBalances(txs);
+  const hb = computeHomeBalances(txs, rateCtx);
+  const myHome = hb.net.get(me.id)?.get(rateCtx.home) ?? 0;
+  const foreign = txs.some((t) => t.currency !== rateCtx.home);
   const members = [...new Set([...trip.members, ...txs.flatMap((t) => [t.payer_id, t.payee_id, ...t.splits.map((s) => s.person_id)]).filter((x): x is Id => x != null)])];
   const perPerson = members.map((p) => {
     const paid = new Map<string, number>(), share = new Map<string, number>();
@@ -182,7 +194,7 @@ export function TripView({ trip }: { trip: Trip }) {
       <div className="grid-4">
         <Stat label="Total spent (everyone)"><MoneyList map={spend} empty="Nothing yet" /></Stat>
         {!readOnly && <Stat label="Your share"><MoneyList map={myShare} empty="Nothing yet" /></Stat>}
-        {!readOnly && <Stat label="Your position"><MoneyList map={b.net.get(me.id) ?? new Map()} sign empty="Settled" /></Stat>}
+        {!readOnly && <Stat label="Your position" foot={foreign && myHome ? `≈ ${formatAmount(myHome, rateCtx.home)}${hb.unconverted.size ? ' + unconverted' : ''}` : undefined}><MoneyList map={b.net.get(me.id) ?? new Map()} sign empty="Settled" /></Stat>}
         {readOnly && <Stat label="Transactions">{txs.length}</Stat>}
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>

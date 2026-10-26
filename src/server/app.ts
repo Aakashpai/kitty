@@ -42,6 +42,19 @@ const date = (v: unknown, label: string): string => {
   return s;
 };
 const flag = (v: unknown): 0 | 1 => (v === 1 || v === true || v === '1' ? 1 : 0);
+/** { SGD: 75, MYR: 24.5 } -> validated map; empty/invalid shapes become null. */
+const rates = (v: unknown): Record<string, number> | null => {
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out: Record<string, number> = {};
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    const code = String(k).trim().toUpperCase();
+    const n = Number(raw);
+    if (!/^[A-Z]{3}$/.test(code)) throw new HttpError(400, `Rate currency "${k}" must be a 3-letter code`);
+    if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, `Rate for ${code} must be a positive number`);
+    out[code] = n;
+  }
+  return Object.keys(out).length ? out : null;
+};
 const password = (v: unknown): string => {
   const s = String(v ?? '');
   if (s.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
@@ -171,7 +184,11 @@ export async function createApp(opts: AppOptions) {
 
   // --- ledger ---------------------------------------------------------------------------------
   route('GET', '/api/state', 'user', (c) => db.loadState(c.user));
-  route('PUT', '/api/settings', 'user', async (c) => (await db.setSetting('home_currency', currency(c.body.home_currency)), { ok: true }));
+  route('PUT', '/api/settings', 'user', async (c) => {
+    if (c.body.home_currency !== undefined) await db.setSetting('home_currency', currency(c.body.home_currency));
+    if (c.body.rates !== undefined) await db.setSetting('rates', JSON.stringify(rates(c.body.rates) ?? {}));
+    return { ok: true };
+  });
 
   route('POST', '/api/people', 'user', (c) => db.createPerson(str(c.body.name, 'Name')));
   route('PUT', '/api/people/:id', 'user', async (c) => (await db.updatePerson(Number(c.params.id), { name: str(c.body.name, 'Name'), archived: flag(c.body.archived) }), { ok: true }));
@@ -199,7 +216,7 @@ export async function createApp(opts: AppOptions) {
     const start_date = b.start_date ? date(b.start_date, 'Start date') : null;
     const end_date = b.end_date ? date(b.end_date, 'End date') : null;
     if (start_date && end_date && end_date < start_date) throw new HttpError(400, 'End date is before the start date');
-    return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members };
+    return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members, rates: rates(b.rates) };
   };
   route('POST', '/api/trips', 'user', async (c) => db.createTrip(await tripBody(c)));
   route('PUT', '/api/trips/:id', 'user', async (c) => (await db.updateTrip(Number(c.params.id), await tripBody(c)), { ok: true }));

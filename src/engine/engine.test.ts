@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  accountEntries, allocate, computeBalances, effectsOf, emptyTx, formatAmount, normalizeTx, pairwiseDebts,
+  accountEntries, allocate, computeBalances, computeHomeBalances, conversionOf, effectsOf, emptyTx, formatAmount, homeValue, normalizeTx, pairwiseDebts,
   parseAmount, refundedTotal, settlementPlan, spendingBy, toMajor, validateTx,
-  type Account, type LedgerCtx, type Person, type Tx,
+  type Account, type LedgerCtx, type Person, type RateCtx, type Trip, type Tx,
 } from './index.ts';
 
 // --- fixtures -------------------------------------------------------------------------------
@@ -25,7 +25,8 @@ const accounts: Account[] = [
 let nextId = 100;
 const mk = (p: Partial<Tx>): Tx => ({ ...emptyTx(), id: nextId++, date: '2026-03-10', description: 'x', created_at: '', updated_at: '', ...p }) as Tx;
 const equal = (amount: number, ids: number[]) => allocate(amount, ids.map(() => 1)).map((a, i) => ({ person_id: ids[i]!, amount: a, input: null }));
-const ctx = (transactions: Tx[] = []): LedgerCtx => ({ people, accounts, trips: [{ id: 1, name: 'SG', start_date: null, end_date: null, currency: 'SGD', notes: null, archived: 0, members: [ME, ALICE, BOB, CARA] }], transactions });
+const trips: Trip[] = [{ id: 1, name: 'SG', start_date: null, end_date: null, currency: 'SGD', notes: null, archived: 0, members: [ME, ALICE, BOB, CARA], rates: null }];
+const ctx = (transactions: Tx[] = []): LedgerCtx => ({ people, accounts, trips, transactions });
 const pairs = (b: ReturnType<typeof computeBalances>) => pairwiseDebts(b).map((d) => `${d.from}->${d.to} ${d.currency} ${d.amount}`);
 
 // --- money ------------------------------------------------------------------------------------
@@ -347,4 +348,43 @@ test('spendingBy nets refunds and ignores non-spending types; accountEntries ign
   assert.equal(by.size, 1);
   assert.deepEqual(accountEntries(txs, accounts[1]!).map((r) => r.delta), [-500, 200, 9000]);
   assert.deepEqual(accountEntries(txs, accounts[2]!).map((r) => r.delta), [100]);
+});
+
+// --- home-currency conversion ------------------------------------------------------------------
+test('conversionOf: same, actual leg, trip rate, global rate, none', () => {
+  const c: RateCtx = { home: 'INR', rates: { SGD: 75 }, trips: [{ ...trips[0]!, rates: { SGD: 60 } }, { ...trips[0]!, id: 2, rates: null }], accounts };
+  assert.deepEqual(conversionOf(mk({ type: 'expense', currency: 'INR', amount: 100, payer_id: ME, splits: equal(100, [ME]) }), c), { rate: 1, kind: 'same' });
+  assert.deepEqual(conversionOf(mk({ type: 'expense', currency: 'SGD', amount: 10_000, payer_id: ME, from_account_id: CARD, from_amount: 740_000, splits: equal(10_000, [ME]) }), c), { rate: 74, kind: 'actual' });
+  assert.deepEqual(conversionOf(mk({ type: 'expense', currency: 'SGD', amount: 100, payer_id: ME, trip_id: 1, splits: equal(100, [ME]) }), c), { rate: 60, kind: 'rate' });
+  assert.deepEqual(conversionOf(mk({ type: 'expense', currency: 'SGD', amount: 100, payer_id: ME, trip_id: 2, splits: equal(100, [ME]) }), c), { rate: 75, kind: 'rate' });
+  assert.equal(conversionOf(mk({ type: 'expense', currency: 'MYR', amount: 100, payer_id: ME, splits: equal(100, [ME]) }), c), null);
+  // ₹2,000 paid to settle SGD 32.50 carries its own real rate
+  assert.deepEqual(conversionOf(mk({ type: 'repayment', currency: 'INR', amount: 200_000, settled_currency: 'SGD', settled_amount: 3_250, payer_id: ALICE, payee_id: ME }), c), { rate: 200_000 / 3_250, kind: 'actual' });
+  assert.deepEqual(homeValue(mk({ type: 'expense', currency: 'SGD', amount: 1_000, payer_id: ME, trip_id: 2, splits: equal(1_000, [ME]) }), c), { amount: 75_000, kind: 'rate' });
+});
+
+test('computeHomeBalances: real charges allocate exactly, table rates estimate, unknown stays unconverted', () => {
+  const c: RateCtx = { home: 'INR', rates: { SGD: 75 }, trips, accounts };
+  const txs = [
+    // card: SGD 50.12 charged ₹3,729.93, three ways -> the three INR shares sum to the charge
+    mk({ type: 'expense', currency: 'SGD', amount: 5_012, payer_id: ME, from_account_id: CARD, from_amount: 372_993, splits: equal(5_012, [ME, ALICE, BOB]) }),
+    // cash: SGD 23.50 two ways at 75 -> Alice owes ₹881.25
+    mk({ type: 'expense', currency: 'SGD', amount: 2_350, payer_id: ME, from_account_id: CASH_SGD, splits: equal(2_350, [ME, ALICE]) }),
+    // no rate for MYR
+    mk({ type: 'expense', currency: 'MYR', amount: 1_000, payer_id: ME, splits: equal(1_000, [ME, CARA]) }),
+    // repayment in SGD cash converts at the table rate
+    mk({ type: 'repayment', currency: 'SGD', amount: 1_000, payer_id: BOB, payee_id: ME }),
+  ];
+  const h = computeHomeBalances(txs, c);
+  const parts = allocate(372_993, [1_671, 1_671, 1_670]);
+  assert.equal(parts.reduce((a, b) => a + b, 0), 372_993);
+  const alice = h.net.get(ALICE)!.get('INR')!;
+  assert.equal(alice, -(parts[1]! + 88_125));
+  assert.equal(h.net.get(BOB)!.get('INR'), -(parts[2]! - 75_000));
+  assert.equal(h.net.get(ME)!.get('INR'), -(alice + h.net.get(BOB)!.get('INR')!));
+  assert.equal(h.actual, parts[1]! + parts[2]!);
+  assert.equal(h.estimated, 88_125 + 75_000);
+  assert.deepEqual([...h.unconverted], [['MYR', 500]]);
+  assert.ok(h.net.get(CARA) == null, 'unconverted debts do not enter the home net');
+  assert.deepEqual(settlementPlan(h.net).map((d) => d.currency), ['INR', 'INR']);
 });

@@ -121,6 +121,16 @@ test('ledger end to end: people, accounts, trip, every transaction type, balance
   await owner.ok('DELETE', `/api/reconciliations/${recon.id}`);
   await owner.ok('PUT', '/api/settings', { home_currency: 'sgd' });
   assert.equal((await owner.state()).settings.home_currency, 'SGD');
+  // exchange rates: global and per trip
+  await owner.ok('PUT', '/api/settings', { rates: { inr: '0.0133', MYR: 0.31 } });
+  assert.deepEqual((await owner.state()).settings.rates, { INR: 0.0133, MYR: 0.31 });
+  assert.equal((await owner.call('PUT', '/api/settings', { rates: { SGD: -1 } })).status, 400);
+  assert.equal((await owner.call('PUT', '/api/settings', { rates: { Rupee: 1 } })).status, 400);
+  const tripRow = (await owner.state()).trips[0]!;
+  await owner.ok('PUT', `/api/trips/${tripRow.id}`, { ...tripRow, rates: { INR: 0.0125 } });
+  assert.deepEqual((await owner.state()).trips[0]!.rates, { INR: 0.0125 });
+  await owner.ok('PUT', `/api/trips/${tripRow.id}`, { ...tripRow, rates: {} });
+  assert.equal((await owner.state()).trips[0]!.rates, null);
 });
 
 test('invites: owner invites a person, invitee signs up as that person, access can be removed', async () => {
