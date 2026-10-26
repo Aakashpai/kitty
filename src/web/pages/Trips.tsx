@@ -8,7 +8,7 @@ import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
-import { Avatar, DangerButton, Empty, ErrorBox, Field, Modal, MoneyList, Stat, fmtDate, hueStyle } from '../components/ui.tsx';
+import { Avatar, DangerButton, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
 
@@ -91,9 +91,10 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
   const [label, setLabel] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
+  const [busy, run] = useBusy();
   const links = state.shares.filter((x) => x.trip_id === trip.id);
   const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}`;
-  const create = async () => {
+  const create = () => run(async () => {
     try {
       await api('POST', '/api/shares', { trip_id: trip.id, label: label || null });
       setLabel('');
@@ -102,7 +103,15 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
     } catch (e) {
       setErr(errorText(e));
     }
-  };
+  });
+  const revoke = (id: number) => run(async () => {
+    try {
+      await api('DELETE', `/api/shares/${id}`);
+      await reload();
+    } catch (e) {
+      setErr(errorText(e));
+    }
+  });
   const copy = async (x: Share) => {
     await copyText(urlOf(x));
     setCopied(x.id);
@@ -125,7 +134,7 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
                       </td>
                       <td className="actions">
                         <button className="small" onClick={() => void copy(x)} data-testid={`copy-share-${x.id}`}><Copy />{copied === x.id ? 'Copied' : 'Copy link'}</button>
-                        <button className="small danger" onClick={async () => { await api('DELETE', `/api/shares/${x.id}`); await reload(); }} data-testid={`revoke-share-${x.id}`}><Trash2 />Turn off</button>
+                        <button className="small danger" disabled={busy} onClick={() => void revoke(x.id)} data-testid={`revoke-share-${x.id}`}><Trash2 />Turn off</button>
                       </td>
                     </tr>
                   ))}
@@ -136,7 +145,7 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
         )}
         <div className="row" style={{ flexWrap: 'nowrap' }}>
           <input value={label} placeholder="Label (optional), e.g. For the group chat" onChange={(e) => setLabel(e.target.value)} data-testid="share-label" />
-          <button className="primary" onClick={() => void create()} data-testid="create-share"><Link2 />New link</button>
+          <button className="primary" disabled={busy} onClick={() => void create()} data-testid="create-share">{busy ? <Spinner /> : <Link2 />}New link</button>
         </div>
         <ErrorBox error={err} />
       </div>
@@ -254,11 +263,11 @@ export function Trips({ id, creating = false }: { id: number | null; creating?: 
         <button className="primary" onClick={() => setOpen(true)} data-testid="new-trip"><Plus />New trip</button>
       </div>
       {active.length === 0 && <Empty title="No trips yet">Create one to keep a trip's expenses separate from everything else.</Empty>}
-      <div className="grid-3">{active.map((t) => <TripCard key={t.id} trip={t} />)}</div>
+      <div className="trip-grid">{active.map((t) => <TripCard key={t.id} trip={t} />)}</div>
       {archived.length > 0 && (
         <details>
           <summary>Archived ({archived.length})</summary>
-          <div className="grid-3" style={{ marginTop: 'var(--space-3)' }}>{archived.map((t) => <TripCard key={t.id} trip={t} />)}</div>
+          <div className="trip-grid" style={{ marginTop: 'var(--space-3)' }}>{archived.map((t) => <TripCard key={t.id} trip={t} />)}</div>
         </details>
       )}
       {(open || creating) && <TripForm onClose={close} />}

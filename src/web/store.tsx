@@ -21,6 +21,30 @@ export interface Ledger {
 const Ctx = createContext<Ledger | null>(null);
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'down';
 
+/** Thin bar at the very top while any request is in flight; appears only after 150ms so quick calls don't flicker. */
+function Progress() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    let timer: number | undefined;
+    const on = (e: Event) => {
+      const n = (e as CustomEvent<number>).detail;
+      if (n > 0) {
+        if (timer == null) timer = window.setTimeout(() => setShow(true), 150);
+      } else {
+        if (timer != null) window.clearTimeout(timer);
+        timer = undefined;
+        setShow(false);
+      }
+    };
+    window.addEventListener('ledger:inflight', on);
+    return () => {
+      window.removeEventListener('ledger:inflight', on);
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, []);
+  return show ? <div className="progress" role="progressbar" aria-label="Working" data-testid="progress" /> : null;
+}
+
 /** Polls /api/health until it answers, then calls onBack. Returns a stop function. */
 function watchHealth(onBack: () => void, onTick: (secondsLeft: number) => void) {
   let left = 5;
@@ -149,6 +173,7 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
   if (!value) return <div className="center-box"><span className="pulse" aria-hidden /><p className="muted">Opening your ledger…</p></div>;
   return (
     <Ctx.Provider value={value}>
+      <Progress />
       {offline && (
         <div className="banner" role="status" data-testid="offline-banner">
           <span className="pulse small" aria-hidden />

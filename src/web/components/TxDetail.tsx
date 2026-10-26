@@ -1,9 +1,10 @@
+import { useState } from 'react';
 import { Pencil, Trash2, Undo2 } from 'lucide-react';
 import { formatAmount, refundedTotal, toMajor, type Tx, type TxInput } from '../../engine/index.ts';
-import { api } from '../api.ts';
+import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
-import { Avatar, Modal, Money, TypeBadge, TypeIcon, fmtDate, fmtWhen } from './ui.tsx';
+import { Avatar, ErrorBox, Modal, Money, Spinner, TypeBadge, TypeIcon, fmtDate, fmtWhen, useBusy } from './ui.tsx';
 import { EffectsView } from './effectsView.tsx';
 import { txWho } from './TxList.tsx';
 
@@ -34,6 +35,20 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
   const refunds = state.transactions.filter((t) => t.linked_tx_id === tx.id);
   const original = tx.linked_tx_id != null ? state.transactions.find((t) => t.id === tx.linked_tx_id) : null;
   const history = state.activity.filter((a) => a.entity === 'transaction' && a.entity_id === tx.id);
+  const [busy, run] = useBusy();
+  const [err, setErr] = useState<string | null>(null);
+  const remove = () => {
+    if (busy || !window.confirm(`Delete this ${tx.type}? Balances will be recalculated without it. A snapshot stays in the activity history.`)) return;
+    void run(async () => {
+      try {
+        await api('DELETE', `/api/transactions/${tx.id}`);
+        await l.reload();
+        onClose();
+      } catch (e) {
+        setErr(errorText(e));
+      }
+    });
+  };
   const rows: [string, string][] = [
     ['Date', fmtDate(tx.date)],
     ['Who', txWho(tx, l)],
@@ -107,19 +122,11 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
               <button onClick={() => openForm({ initial: refundPrefill(tx, state.transactions), onSaved: onClose })} data-testid="refund-tx"><Undo2 />Record refund</button>
             )}
           </div>
-          <button
-            className="danger"
-            onClick={async () => {
-              if (!window.confirm(`Delete this ${tx.type}? Balances will be recalculated without it. A snapshot stays in the activity history.`)) return;
-              await api('DELETE', `/api/transactions/${tx.id}`);
-              await l.reload();
-              onClose();
-            }}
-            data-testid="delete-tx"
-          >
-            <Trash2 />Delete
+          <button className="danger" disabled={busy} onClick={remove} data-testid="delete-tx">
+            {busy ? <Spinner /> : <Trash2 />}Delete
           </button>
         </div>}
+        <ErrorBox error={err} />
       </div>
     </Modal>
   );

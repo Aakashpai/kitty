@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowRightLeft, Banknote, HandCoins, Receipt, TrendingUp, Undo2, X, type LucideIcon } from 'lucide-react';
 import { formatAmount, type TxType } from '../../engine/index.ts';
 
@@ -11,6 +11,29 @@ export const Logo = ({ size = 22 }: { size?: number }) => (
   </svg>
 );
 export const APP_NAME = 'Kitty';
+
+export const Spinner = () => <span className="spinner" aria-hidden />;
+
+/**
+ * Guards an async action: while it runs, `busy` is true and further calls are ignored,
+ * so a double tap can never submit twice.
+ */
+export function useBusy(): [boolean, <T>(fn: () => Promise<T>) => Promise<T | undefined>] {
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const run = useCallback(async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+    if (lock.current) return undefined;
+    lock.current = true;
+    setBusy(true);
+    try {
+      return await fn();
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }, []);
+  return [busy, run];
+}
 
 export const TYPE_LABEL: Record<TxType, string> = { expense: 'Expense', transfer: 'Transfer', withdrawal: 'Cash withdrawal', repayment: 'Repayment', income: 'Income', refund: 'Refund' };
 export const TYPE_ICON: Record<TxType, LucideIcon> = { expense: Receipt, transfer: ArrowRightLeft, withdrawal: Banknote, repayment: HandCoins, income: TrendingUp, refund: Undo2 };
@@ -91,20 +114,24 @@ export const Empty = ({ title, children }: { title?: string; children?: ReactNod
 /** Confirm-then-run button; shows the error inline if the action fails. */
 export function DangerButton({ onConfirm, confirm, children, small = true }: { onConfirm: () => Promise<void>; confirm: string; children: ReactNode; small?: boolean }) {
   const [err, setErr] = useState<string | null>(null);
+  const [busy, run] = useBusy();
   return (
     <span className="danger-wrap">
       <button
         className={`danger ${small ? 'small' : ''}`}
-        onClick={async () => {
-          if (!window.confirm(confirm)) return;
-          try {
-            await onConfirm();
-          } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
-          }
+        disabled={busy}
+        onClick={() => {
+          if (busy || !window.confirm(confirm)) return;
+          void run(async () => {
+            try {
+              await onConfirm();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            }
+          });
         }}
       >
-        {children}
+        {busy && <Spinner />}{children}
       </button>
       <ErrorBox error={err} />
     </span>

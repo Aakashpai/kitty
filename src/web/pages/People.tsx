@@ -3,7 +3,7 @@ import { Copy, Plus, UserPlus, X } from 'lucide-react';
 import { pairwiseDebts, type Invite, type Person } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { copyText, useLedger } from '../store.tsx';
-import { Avatar, DangerButton, ErrorBox, MoneyList, fmtDate } from '../components/ui.tsx';
+import { Avatar, DangerButton, ErrorBox, MoneyList, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
 
 export function People() {
   const { state, balances, reload, me, user } = useLedger();
@@ -21,15 +21,17 @@ export function People() {
     window.setTimeout(() => setCopied(null), 1500);
   };
   const pairs = pairwiseDebts(balances);
-  const run = async (fn: () => Promise<unknown>) => {
-    try {
-      await fn();
-      await reload();
-      setErr(null);
-    } catch (e) {
-      setErr(errorText(e));
-    }
-  };
+  const [busy, guard] = useBusy();
+  const run = (fn: () => Promise<unknown>) =>
+    guard(async () => {
+      try {
+        await fn();
+        await reload();
+        setErr(null);
+      } catch (e) {
+        setErr(errorText(e));
+      }
+    });
   const add = () => run(async () => { await api('POST', '/api/people', { name }); setName(''); });
   const update = (p: Person, patch: Partial<Person>) => run(() => api('PUT', `/api/people/${p.id}`, { ...p, ...patch }));
   const tripsOf = (id: number) => state.trips.filter((t) => t.members.includes(id)).length;
@@ -40,7 +42,7 @@ export function People() {
         <div><h1>People</h1><div className="sub">{state.people.length - 1} friend{state.people.length === 2 ? '' : 's'}</div></div>
         <form className="row" onSubmit={(e) => { e.preventDefault(); if (name.trim()) void add(); }}>
           <input value={name} placeholder="Friend's name" style={{ width: 220 }} onChange={(e) => setName(e.target.value)} data-testid="person-name" />
-          <button className="primary" type="submit" disabled={!name.trim()} data-testid="add-person"><Plus />Add</button>
+          <button className="primary" type="submit" disabled={busy || !name.trim()} data-testid="add-person">{busy ? <Spinner /> : <Plus />}Add</button>
         </form>
       </div>
       <ErrorBox error={err} />
@@ -55,7 +57,7 @@ export function People() {
                     {editing?.id === p.id ? (
                       <form className="row" style={{ flexWrap: 'nowrap' }} onSubmit={(e) => { e.preventDefault(); void update(p, { name: editing.name }).then(() => setEditing(null)); }}>
                         <input value={editing.name} autoFocus style={{ width: 180 }} onChange={(e) => setEditing({ id: p.id, name: e.target.value })} />
-                        <button className="small primary" type="submit">Save</button>
+                        <button className="small primary" type="submit" disabled={busy}>Save</button>
                         <button className="small ghost" type="button" onClick={() => setEditing(null)}>Cancel</button>
                       </form>
                     ) : (
@@ -67,14 +69,14 @@ export function People() {
                   <td className="num"><MoneyList map={balances.net.get(p.id) ?? new Map()} sign empty="settled" /></td>
                   <td className="actions">
                     {isOwner && !p.is_me && !userOf(p.id) && !inviteOf(p.id) && !p.archived && (
-                      <button className="small" onClick={() => run(() => api('POST', '/api/invites', { person_id: p.id }))} data-testid={`invite-${p.id}`}><UserPlus />Invite</button>
+                      <button className="small" disabled={busy} onClick={() => void run(() => api('POST', '/api/invites', { person_id: p.id }))} data-testid={`invite-${p.id}`}><UserPlus />Invite</button>
                     )}
                     {isOwner && inviteOf(p.id) && (
                       <button className="small" onClick={() => void copyInvite(inviteOf(p.id)!)} data-testid={`copy-invite-${p.id}`}><Copy />{copied === inviteOf(p.id)!.id ? 'Copied' : 'Copy invite link'}</button>
                     )}
                     {userOf(p.id) && <span className="badge">can sign in</span>}
                     <button className="small ghost" onClick={() => setEditing({ id: p.id, name: p.name })}>Rename</button>
-                    {!p.is_me && <button className="small ghost" onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
+                    {!p.is_me && <button className="small ghost" disabled={busy} onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
                     {!p.is_me && <DangerButton confirm={`Delete ${p.name}? Only possible if they have no transactions.`} onConfirm={() => run(() => api('DELETE', `/api/people/${p.id}`))}>Delete</DangerButton>}
                   </td>
                 </tr>
@@ -108,7 +110,7 @@ export function People() {
                     <td><span className="badge">invited</span></td>
                     <td className="actions">
                       <button className="small" onClick={() => void copyInvite(i)}><Copy />{copied === i.id ? 'Copied' : 'Copy link'}</button>
-                      <button className="small ghost" onClick={() => run(() => api('DELETE', `/api/invites/${i.id}`))} aria-label="Cancel invite"><X />Cancel</button>
+                      <button className="small ghost" disabled={busy} onClick={() => void run(() => api('DELETE', `/api/invites/${i.id}`))} aria-label="Cancel invite"><X />Cancel</button>
                     </td>
                   </tr>
                 ))}

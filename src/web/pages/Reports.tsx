@@ -3,7 +3,7 @@ import { Database, Download, Upload } from 'lucide-react';
 import { effectsOf, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
-import { ErrorBox, Field, Money, MoneyList, Stat } from '../components/ui.tsx';
+import { ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
@@ -61,6 +61,7 @@ export function Reports() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, run] = useBusy();
 
   const txs = useMemo(() => state.transactions.filter((t) => inScope(t, scope) && (!from || t.date >= from) && (!to || t.date <= to)), [state.transactions, scope, from, to]);
 
@@ -94,29 +95,31 @@ export function Reports() {
     ].map(csvCell).join(',');
     download(`ledger-transactions-${new Date().toISOString().slice(0, 10)}.csv`, [head.join(','), ...txs.map(line)].join('\n'), 'text/csv');
   };
-  const backup = async () => {
+  const backup = () => run(async () => {
     try {
       const data = await api('GET', '/api/backup');
-      download(`ledger-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, JSON.stringify(data, null, 1), 'application/json');
+      download(`kitty-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, JSON.stringify(data, null, 1), 'application/json');
     } catch (e) { setErr(errorText(e)); }
-  };
-  const restore = async (file: File) => {
+  });
+  const restore = (file: File) => {
     if (!window.confirm('Restoring replaces EVERYTHING in this ledger with the backup. Continue?')) return;
-    try {
-      await api('POST', '/api/restore', JSON.parse(await file.text()));
-      await reload();
-      setMsg('Backup restored.');
-      setErr(null);
-    } catch (e) { setErr(errorText(e)); }
-    if (fileRef.current) fileRef.current.value = '';
+    void run(async () => {
+      try {
+        await api('POST', '/api/restore', JSON.parse(await file.text()));
+        await reload();
+        setMsg('Backup restored.');
+        setErr(null);
+      } catch (e) { setErr(errorText(e)); }
+      if (fileRef.current) fileRef.current.value = '';
+    });
   };
-  const snapshot = async () => {
+  const snapshot = () => run(async () => {
     try {
       const r = await api<{ file: string }>('POST', '/api/snapshot');
       setMsg(`Database snapshot written to ${r.file}`);
       setErr(null);
     } catch (e) { setErr(errorText(e)); }
-  };
+  });
 
   return (
     <div className="stack">
@@ -146,10 +149,10 @@ export function Reports() {
         <div className="panel-body stack">
           <div className="row">
             <button onClick={exportCsv} data-testid="export-csv"><Download />CSV of this range</button>
-            <button onClick={() => void backup()} data-testid="download-backup"><Download />Full backup (JSON)</button>
-            <button onClick={() => void snapshot()}><Database />Snapshot database file</button>
+            <button disabled={busy} onClick={() => void backup()} data-testid="download-backup">{busy ? <Spinner /> : <Download />}Full backup (JSON)</button>
+            <button disabled={busy} onClick={() => void snapshot()}><Database />Snapshot database file</button>
             <label className="btn">
-              <Upload />Restore from backup… <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) void restore(f); }} data-testid="restore-file" />
+              <Upload />Restore from backup… <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); }} data-testid="restore-file" />
             </label>
           </div>
           {msg && <div className="ok-box">{msg}</div>}

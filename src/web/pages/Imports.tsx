@@ -4,7 +4,7 @@ import { api, errorText } from '../api.ts';
 import { today, useLedger } from '../store.tsx';
 import { useRoute } from '../router.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
-import { DangerButton, Empty, ErrorBox, Field, Money, TypeBadge, fmtDate } from '../components/ui.tsx';
+import { DangerButton, Empty, ErrorBox, Field, Money, Spinner, TypeBadge, fmtDate, useBusy } from '../components/ui.tsx';
 import { FileInput } from 'lucide-react';
 
 /** Minimal RFC-4180 parser: quotes, escaped quotes, CRLF. */
@@ -56,6 +56,7 @@ function Reconcile({ account }: { account: Account }) {
   const [counted, setCounted] = useState('');
   const [note, setNote] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [busy, run] = useBusy();
   const entries = accountEntries(state.transactions, account);
   const expected = entries.length ? entries[entries.length - 1]!.balance : account.opening_balance;
   const sum = (f: (e: { tx: Tx; delta: number }) => boolean) => entries.filter(f).reduce((s, e) => s + e.delta, 0);
@@ -66,17 +67,19 @@ function Reconcile({ account }: { account: Account }) {
   const parsed = counted.trim() ? parseAmount(counted, account.currency) : null;
   const diff = parsed == null ? null : parsed - expected;
   const history = state.reconciliations.filter((r) => r.account_id === account.id);
-  const save = async () => {
+  const save = () => {
     if (parsed == null) return setErr('Enter the amount you counted');
-    try {
-      await api('POST', '/api/reconciliations', { account_id: account.id, date: today(), counted_amount: parsed, expected_amount: expected, note: note || null });
-      await reload();
-      setCounted('');
-      setNote('');
-      setErr(null);
-    } catch (e) {
-      setErr(errorText(e));
-    }
+    void run(async () => {
+      try {
+        await api('POST', '/api/reconciliations', { account_id: account.id, date: today(), counted_amount: parsed, expected_amount: expected, note: note || null });
+        await reload();
+        setCounted('');
+        setNote('');
+        setErr(null);
+      } catch (e) {
+        setErr(errorText(e));
+      }
+    });
   };
   return (
     <div className="stack">
@@ -101,7 +104,7 @@ function Reconcile({ account }: { account: Account }) {
           </div>
         )}
         <ErrorBox error={err} />
-        <div><button className="primary" disabled={parsed == null} onClick={() => void save()} data-testid="save-count"><FileInput />Save this count</button></div>
+        <div><button className="primary" disabled={busy || parsed == null} onClick={save} data-testid="save-count">{busy ? <Spinner /> : <FileInput />}Save this count</button></div>
       </div>
       {history.length > 0 && (
         <div className="panel pad">

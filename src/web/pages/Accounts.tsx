@@ -4,7 +4,7 @@ import { ACCOUNT_TYPES, accountEntries, parseAmount, toMajor, type Account } fro
 import { api, errorText } from '../api.ts';
 import { COMMON_CURRENCIES, useLedger } from '../store.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
-import { DangerButton, Empty, ErrorBox, Field, Modal, Money, Stat, TypeBadge, fmtDate } from '../components/ui.tsx';
+import { DangerButton, Empty, ErrorBox, Field, Modal, Money, Spinner, Stat, TypeBadge, fmtDate, useBusy } from '../components/ui.tsx';
 
 const ACCOUNT_ICON: Record<Account['type'], LucideIcon> = { cash: Banknote, bank: Landmark, card: CreditCard, wallet: Wallet, other: Coins };
 const typeLabel = (t: Account['type']) => (t === 'cash' ? 'Cash holding' : t[0]!.toUpperCase() + t.slice(1));
@@ -15,18 +15,21 @@ function AccountForm({ existing, onClose }: { existing?: Account; onClose: () =>
   const [a, setA] = useState<Omit<Account, 'id'>>(existing ?? { person_id: me.id, name: '', type: 'cash', currency: state.settings.home_currency, opening_balance: 0, archived: 0 });
   const [opening, setOpening] = useState(existing ? toMajor(existing.opening_balance, existing.currency) : '0');
   const [err, setErr] = useState<string | null>(null);
+  const [busy, run] = useBusy();
   const parsed = parseAmount(opening || '0', a.currency);
-  const save = async () => {
+  const save = () => {
     if (parsed == null) return setErr('Opening balance is not a valid amount');
-    try {
-      const body = { ...a, opening_balance: parsed };
-      if (existing) await api('PUT', `/api/accounts/${existing.id}`, body);
-      else await api('POST', '/api/accounts', body);
-      await reload();
-      onClose();
-    } catch (e) {
-      setErr(errorText(e));
-    }
+    void run(async () => {
+      try {
+        const body = { ...a, opening_balance: parsed };
+        if (existing) await api('PUT', `/api/accounts/${existing.id}`, body);
+        else await api('POST', '/api/accounts', body);
+        await reload();
+        onClose();
+      } catch (e) {
+        setErr(errorText(e));
+      }
+    });
   };
   return (
     <Modal title={existing ? 'Edit account' : 'New account or cash holding'} onClose={onClose}>
@@ -53,7 +56,7 @@ function AccountForm({ existing, onClose }: { existing?: Account; onClose: () =>
         <ErrorBox error={err} />
         <div className="row end">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!a.name.trim() || parsed == null} onClick={() => void save()} data-testid="save-account">{existing ? 'Save' : 'Create'}</button>
+          <button className="primary" disabled={busy || !a.name.trim() || parsed == null} onClick={save} data-testid="save-account">{busy && <Spinner />}{existing ? 'Save' : 'Create'}</button>
         </div>
       </div>
     </Modal>
@@ -115,10 +118,11 @@ export function Accounts({ id }: { id: number | null }) {
   const [editing, setEditing] = useState<Account | null>(null);
   const [home, setHome] = useState(state.settings.home_currency);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, run] = useBusy();
   const account = id != null ? accounts.get(id) : undefined;
   if (id != null && !account) return <Empty title="Account not found"><a href="#/accounts">Back</a></Empty>;
   if (account) return <AccountDetail account={account} />;
-  const saveHome = async () => {
+  const saveHome = () => run(async () => {
     try {
       await api('PUT', '/api/settings', { home_currency: home });
       await reload();
@@ -126,15 +130,15 @@ export function Accounts({ id }: { id: number | null }) {
     } catch (e) {
       setErr(errorText(e));
     }
-  };
-  const archive = async (a: Account) => {
+  });
+  const archive = (a: Account) => run(async () => {
     try {
       await api('PUT', `/api/accounts/${a.id}`, { ...a, archived: a.archived ? 0 : 1 });
       await reload();
     } catch (e) {
       setErr(errorText(e));
     }
-  };
+  });
   return (
     <div className="stack">
       <div className="page-head">
@@ -157,7 +161,7 @@ export function Accounts({ id }: { id: number | null }) {
                   <td className="num"><Money amount={balances.accounts.get(a.id) ?? 0} currency={a.currency} /></td>
                   <td className="actions">
                     <button className="small ghost" onClick={() => setEditing(a)}>Edit</button>
-                    <button className="small ghost" onClick={() => void archive(a)}>{a.archived ? 'Unarchive' : 'Archive'}</button>
+                    <button className="small ghost" disabled={busy} onClick={() => void archive(a)}>{a.archived ? 'Unarchive' : 'Archive'}</button>
                     <DangerButton confirm={`Delete ${a.name}? Only possible if no transactions use it.`} onConfirm={async () => { await api('DELETE', `/api/accounts/${a.id}`); await reload(); }}>Delete</DangerButton>
                   </td>
                 </tr>
@@ -171,7 +175,7 @@ export function Accounts({ id }: { id: number | null }) {
         <div className="row" style={{ marginTop: 8 }}>
           <input list="currencies" value={home} maxLength={3} style={{ width: 96 }} onChange={(e) => setHome(e.target.value.toUpperCase())} data-testid="home-currency" />
           <datalist id="currencies">{COMMON_CURRENCIES.map((c) => <option key={c} value={c} />)}</datalist>
-          <button onClick={() => void saveHome()} disabled={home === state.settings.home_currency}>Save</button>
+          <button onClick={() => void saveHome()} disabled={busy || home === state.settings.home_currency}>{busy && <Spinner />}Save</button>
           <span className="faint small">Default for new accounts and personal transactions. Nothing is ever converted automatically.</span>
         </div>
       </div>
