@@ -80,7 +80,7 @@ export function People() {
                   ) : (
                     <div className="title">
                       {p.name}
-                      {p.is_me && <span className="badge">you</span>}
+                      {p.is_me ? <span className="badge">you</span> : null}
                       {u && <span className="badge">can sign in</span>}
                       {inv && <span className="badge">invited</span>}
                       {p.archived ? <span className="badge">archived</span> : null}
