@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, settlementPlan, type Id, type Tx } from '../../engine/index.ts';
-import { useLedger } from '../store.tsx';
+import { ArrowRight, Copy } from 'lucide-react';
+import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, settlementPlan, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
+import { copyText, useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, Empty, Money, MoneyList } from './ui.tsx';
 
@@ -34,6 +34,25 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
       ? { type: 'repayment', payer_id: from, payee_id: to, currency: home, amount: Math.round(amount * rate), settled_currency: currency, settled_amount: amount, trip_id: tripId, full_settlement: 1, description: desc }
       : { type: 'repayment', payer_id: from, payee_id: to, currency, amount, trip_id: tripId, full_settlement: 1, description: desc } });
   };
+  const [copied, setCopied] = useState<number | null>(null);
+  const first = (id: Id) => nameOf(id).split(' ')[0]!;
+  /** WhatsApp-ready reminder for one settlement line, with a UPI deep link when the payee has an ID. */
+  const requestText = (d: Debt) => {
+    const payee = people.get(d.to), rate = d.currency === home ? 1 : rateFor(d.currency);
+    const inr = rate ? Math.round(d.amount * rate) : null;
+    const where = trip ? ` for ${trip.name}` : '';
+    const amount = d.currency === home ? formatAmount(d.amount, home) : `${formatAmount(d.amount, d.currency)}${inr ? ` (≈ ${formatAmount(inr, home)} at 1 ${d.currency} = ${rate})` : ''}`;
+    let text = `Hi ${first(d.from)}, settling up${where}: you owe ${nameOf(d.to)} ${amount}.`;
+    if (payee?.upi_id && inr) text += `\nPay via UPI: upi://pay?pa=${encodeURIComponent(payee.upi_id)}&pn=${encodeURIComponent(payee.name)}&am=${toMajor(inr, home)}&cu=${home}&tn=${encodeURIComponent(`Kitty${where}`)}`;
+    else if (!payee?.upi_id) text += `\n(Add ${first(d.to)}'s UPI ID under People to include a payment link.)`;
+    return text;
+  };
+  const copyRequest = async (text: string, key: number) => {
+    await copyText(text);
+    setCopied(key);
+    window.setTimeout(() => setCopied(null), 1500);
+  };
+  const allText = () => [`Settling up${trip ? ` for ${trip.name}` : ''}:`, ...plan.map((d) => `• ${first(d.from)} → ${first(d.to)}: ${formatAmount(d.amount, d.currency)}${d.currency !== home && rateFor(d.currency) ? ` (≈ ${formatAmount(Math.round(d.amount * rateFor(d.currency)!), home)})` : ''}`), 'Sent from Kitty'].join('\n');
   const view = inHome ? h : b;
   const pairsV = pairwiseDebts(view);
   const nets = [...view.net].filter(([, m]) => [...m.values()].some((v) => v !== 0)).sort(([a], [c]) => (a === me.id ? -1 : c === me.id ? 1 : nameOf(a).localeCompare(nameOf(c))));
@@ -71,7 +90,7 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
         </div>
         <div className="stack">
           <div className="panel">
-            <div className="panel-head"><h3>Simplest way to settle</h3><span className="faint small">{plan.length} payment{plan.length === 1 ? '' : 's'} instead of {pairs.length}</span></div>
+            <div className="panel-head"><h3>Simplest way to settle</h3><span className="row"><span className="faint small">{plan.length} payment{plan.length === 1 ? '' : 's'} instead of {pairs.length}</span><button className="small ghost" onClick={() => void copyRequest(allText(), -1)} data-testid="copy-all"><Copy />{copied === -1 ? 'Copied' : 'Copy all'}</button></span></div>
             <div className="table-wrap">
               <table data-testid="settlement-plan">
                 <tbody>
@@ -81,14 +100,17 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
                       <tr key={i}>
                         <td><span className="who"><Person id={d.from} /><span className="arrow"><ArrowRight /></span><Person id={d.to} /></span></td>
                         <td className="num"><Money amount={d.amount} currency={d.currency} />{r ? <div className="faint small">≈ {formatAmount(Math.round(d.amount * r), home)}</div> : null}</td>
-                        {!readOnly && <td className="actions"><button className="small" onClick={() => record(d.from, d.to, d.currency, d.amount)}>Record</button></td>}
+                        <td className="actions">
+                          <button className="small ghost" onClick={() => void copyRequest(requestText(d), i)} title="Copy a message with the amount and a UPI link" data-testid={`copy-request-${i}`}><Copy />{copied === i ? 'Copied' : 'Request'}</button>
+                          {!readOnly && <button className="small" onClick={() => record(d.from, d.to, d.currency, d.amount)}>Record</button>}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
             </div>
-            {!readOnly && <div className="panel-foot">{inHome ? `Record files the payment in ${home} and marks which foreign debt it settles, so both currencies stay exact.` : `Recording one opens a repayment${tripId != null ? ' tagged to this trip' : ''} for you to review before saving.`}</div>}
+            <div className="panel-foot">Request copies a WhatsApp-ready message with the amount and, when the receiver has a UPI ID set under People, a tap-to-pay link.{!readOnly ? (inHome ? ` Record files the payment in ${home} and marks which foreign debt it settles.` : ' Record opens a repayment for you to review before saving.') : ''}</div>
           </div>
           <div className="panel">
             <div className="panel-head"><h3>Net position{inHome ? ` (in ${home})` : ''}</h3></div>

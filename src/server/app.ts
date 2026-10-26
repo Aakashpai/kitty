@@ -42,6 +42,12 @@ const date = (v: unknown, label: string): string => {
   return s;
 };
 const flag = (v: unknown): 0 | 1 => (v === 1 || v === true || v === '1' ? 1 : 0);
+const upi = (v: unknown): string | null => {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  if (!/^[A-Za-z0-9._-]{2,64}@[A-Za-z][A-Za-z0-9]{1,30}$/.test(s)) throw new HttpError(400, 'UPI ID should look like name@bank');
+  return s;
+};
 /** { SGD: 75, MYR: 24.5 } -> validated map; empty/invalid shapes become null. */
 const rates = (v: unknown): Record<string, number> | null => {
   if (v == null || typeof v !== 'object' || Array.isArray(v)) return null;
@@ -191,7 +197,7 @@ export async function createApp(opts: AppOptions) {
   });
 
   route('POST', '/api/people', 'user', (c) => db.createPerson(str(c.body.name, 'Name')));
-  route('PUT', '/api/people/:id', 'user', async (c) => (await db.updatePerson(Number(c.params.id), { name: str(c.body.name, 'Name'), archived: flag(c.body.archived) }), { ok: true }));
+  route('PUT', '/api/people/:id', 'user', async (c) => (await db.updatePerson(Number(c.params.id), { name: str(c.body.name, 'Name'), archived: flag(c.body.archived), upi_id: upi(c.body.upi_id) }), { ok: true }));
   route('DELETE', '/api/people/:id', 'user', async (c) => (await db.deletePerson(Number(c.params.id)), { ok: true }));
 
   const accountBody = async (c: Ctx): Promise<Omit<Account, 'id'>> => {

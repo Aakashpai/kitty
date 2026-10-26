@@ -114,6 +114,9 @@ test('ledger end to end: people, accounts, trip, every transaction type, balance
   assert.equal(s2.transactions.length, 3);
   assert.ok(s2.activity.some((a) => a.action === 'delete' && a.entity_id === dinner.id && JSON.parse(a.payload!).description === 'Dinner'));
   // a person without transactions can be deleted; archived people stay
+  await owner.ok('PUT', `/api/people/${alice}`, { name: 'Alice', archived: 0, upi_id: ' alice@okaxis ' });
+  assert.equal((await owner.state()).people.find((p) => p.id === alice)!.upi_id, 'alice@okaxis');
+  assert.equal((await owner.call('PUT', `/api/people/${alice}`, { name: 'Alice', archived: 0, upi_id: 'not a vpa' })).status, 400);
   const temp = (await owner.ok('POST', '/api/people', { name: 'Temp' })).id as number;
   await owner.ok('PUT', `/api/people/${temp}`, { name: 'Temp', archived: 1 });
   await owner.ok('DELETE', `/api/people/${temp}`);

@@ -13,6 +13,7 @@ export interface Person {
   name: string;
   is_me: 0 | 1;
   archived: 0 | 1;
+  upi_id?: string | null; // e.g. name@upi, used to build payment links in settle-up messages
 }
 
 export interface Account {

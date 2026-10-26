@@ -9,7 +9,7 @@ export function People() {
   const { state, balances, reload, me, user, rateCtx } = useLedger();
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ id: number; name: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: number; name: string; upi: string } | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [busy, guard] = useBusy();
   const isOwner = user?.role === 'owner';
@@ -72,8 +72,9 @@ export function People() {
                 <Avatar id={p.id} name={p.name} />
                 <div className="body">
                   {editing?.id === p.id ? (
-                    <form className="row" style={{ flexWrap: 'nowrap' }} onSubmit={(e) => { e.preventDefault(); void update(p, { name: editing.name }).then(() => setEditing(null)); }}>
-                      <input value={editing.name} autoFocus style={{ width: 200 }} onChange={(e) => setEditing({ id: p.id, name: e.target.value })} />
+                    <form className="row" style={{ flexWrap: 'wrap' }} onSubmit={(e) => { e.preventDefault(); void update(p, { name: editing.name, upi_id: editing.upi.trim() || null }).then(() => setEditing(null)); }}>
+                      <input value={editing.name} autoFocus style={{ width: 180 }} placeholder="Name" onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                      <input value={editing.upi} style={{ width: 180 }} placeholder="UPI ID (name@bank)" onChange={(e) => setEditing({ ...editing, upi: e.target.value })} data-testid="upi-input" />
                       <button className="small primary" type="submit" disabled={busy}>Save</button>
                       <button className="small ghost" type="button" onClick={() => setEditing(null)}>Cancel</button>
                     </form>
@@ -86,7 +87,7 @@ export function People() {
                       {p.archived ? <span className="badge">archived</span> : null}
                     </div>
                   )}
-                  <div className="meta">{tripsOf(p.id)} trip{tripsOf(p.id) === 1 ? '' : 's'}{cur.length ? ` · ${words(cur)}` : p.is_me ? '' : ' · settled'}</div>
+                  <div className="meta">{tripsOf(p.id)} trip{tripsOf(p.id) === 1 ? '' : 's'}{cur.length ? ` · ${words(cur)}` : p.is_me ? '' : ' · settled'}{p.upi_id ? ` · UPI ${p.upi_id}` : ''}</div>
                 </div>
                 <div className="amt">
                   {p.is_me ? null : total > 0 ? (
@@ -109,7 +110,7 @@ export function People() {
                   <details className="menu">
                     <summary aria-label={`More actions for ${p.name}`}><MoreHorizontal /></summary>
                     <div className="menu-list" onClick={(e) => { (e.currentTarget.closest('details') as HTMLDetailsElement).open = false; }}>
-                      <button className="small ghost" onClick={() => setEditing({ id: p.id, name: p.name })}>Rename</button>
+                      <button className="small ghost" onClick={() => setEditing({ id: p.id, name: p.name, upi: p.upi_id ?? '' })}>Rename / UPI ID</button>
                       {!p.is_me && <button className="small ghost" disabled={busy} onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
                       {!p.is_me && <DangerButton confirm={`Delete ${p.name}? Only possible if they have no transactions.`} onConfirm={() => run(() => api('DELETE', `/api/people/${p.id}`))}>Delete</DangerButton>}
                     </div>

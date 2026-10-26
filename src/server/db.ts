@@ -130,6 +130,9 @@ const MIGRATIONS: string[] = [
   ALTER TABLE trips ADD COLUMN rates TEXT;
   INSERT OR IGNORE INTO settings (key, value) VALUES ('rates', '{}');
   `,
+  `
+  ALTER TABLE people ADD COLUMN upi_id TEXT;
+  `,
 ];
 
 const parseRates = (v: unknown): Record<string, number> | null => {
@@ -268,7 +271,7 @@ export async function openDb(url: string, authToken?: string) {
         { sql: 'SELECT * FROM transactions ORDER BY date DESC, id DESC' },
         { sql: 'SELECT tx_id, person_id, amount, input FROM splits ORDER BY person_id' },
         { sql: 'SELECT key, value FROM settings' },
-        { sql: 'SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)' },
+        { sql: 'SELECT id, name, is_me, archived, upi_id FROM people ORDER BY is_me DESC, LOWER(name)' },
         { sql: 'SELECT id, person_id, name, type, currency, opening_balance, archived FROM accounts ORDER BY archived, LOWER(name)' },
         { sql: 'SELECT * FROM reconciliations ORDER BY date DESC, id DESC' },
         { sql: 'SELECT * FROM activity ORDER BY id DESC LIMIT 300' },
@@ -325,7 +328,7 @@ export async function openDb(url: string, authToken?: string) {
           { sql: "SELECT * FROM transactions WHERE trip_id = ? AND type IN ('expense','refund','repayment') ORDER BY date DESC, id DESC", args: [tripId] },
           { sql: 'SELECT tx_id, person_id, amount, input FROM splits WHERE tx_id IN (SELECT id FROM transactions WHERE trip_id = ?) ORDER BY person_id', args: [tripId] },
           { sql: 'SELECT key, value FROM settings' },
-          { sql: 'SELECT id, name, is_me, archived FROM people ORDER BY is_me DESC, LOWER(name)' },
+          { sql: 'SELECT id, name, is_me, archived, upi_id FROM people ORDER BY is_me DESC, LOWER(name)' },
         ], 'read');
       } catch (e) {
         throw friendly(e);
@@ -368,10 +371,10 @@ export async function openDb(url: string, authToken?: string) {
     createPerson: (name: string) => inTx(async (t) => {
       const row = (await t.get<{ id: number }>('INSERT INTO people (name) VALUES (?) RETURNING id', [name]))!;
       await logIn(t, 'create', 'person', row.id, `Added ${name}`);
-      return (await t.get<Person>('SELECT id, name, is_me, archived FROM people WHERE id = ?', [row.id]))!;
+      return (await t.get<Person>('SELECT id, name, is_me, archived, upi_id FROM people WHERE id = ?', [row.id]))!;
     }),
-    updatePerson: (id: Id, p: { name: string; archived: 0 | 1 }) => inTx(async (t) => {
-      if (!(await t.run('UPDATE people SET name = ?, archived = ? WHERE id = ?', [p.name, p.archived, id])).changes) throw new HttpError(404, 'Person not found');
+    updatePerson: (id: Id, p: { name: string; archived: 0 | 1; upi_id: string | null }) => inTx(async (t) => {
+      if (!(await t.run('UPDATE people SET name = ?, archived = ?, upi_id = ? WHERE id = ?', [p.name, p.archived, p.upi_id, id])).changes) throw new HttpError(404, 'Person not found');
       await logIn(t, 'update', 'person', id, `Updated ${p.name}`);
     }),
     deletePerson: (id: Id) => inTx(async (t) => {
