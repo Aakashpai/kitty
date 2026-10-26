@@ -3,3 +3,5 @@ dist
 data/*.db*
 backups
 .env
+.vercel
+.env*
