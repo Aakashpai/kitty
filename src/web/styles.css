@@ -388,3 +388,30 @@ details[open] summary::before { transform: rotate(90deg); }
 
 .rates-row { display: grid; grid-template-columns: auto 90px auto 1fr auto auto; gap: 8px; align-items: center; }
 .rates-row input { height: 32px; }
+
+/* ---------- people ---------- */
+.people-list { display: flex; flex-direction: column; }
+.person-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; grid-template-areas: 'avatar body amt actions'; gap: 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.person-row:last-child { border-bottom: 0; }
+.person-row > .avatar { grid-area: avatar; width: 34px; height: 34px; font-size: 12px; }
+.person-row .body { grid-area: body; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.person-row .title { font-weight: 500; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.person-row .meta { font-size: 12.5px; color: var(--text-2); }
+.person-row .amt { grid-area: amt; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; min-width: 120px; }
+.person-row .amt .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); }
+.person-row .amt .label.pos { color: var(--pos); }
+.person-row .amt .label.neg { color: var(--neg); }
+.person-row .amt .amount { font-size: 15px; font-weight: 500; }
+.person-row .actions { grid-area: actions; }
+.menu { position: relative; }
+.menu summary { list-style: none; cursor: pointer; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-xs); color: var(--text-2); }
+.menu summary::-webkit-details-marker, .menu summary::before { display: none; }
+.menu summary:hover, .menu[open] summary { background: var(--surface-3); color: var(--text); }
+.menu summary svg { width: 16px; height: 16px; }
+.menu-list { position: absolute; right: 0; top: 32px; z-index: 30; min-width: 150px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 2px; }
+.menu-list button, .menu-list .danger-wrap button { width: 100%; justify-content: flex-start; border: 0; background: transparent; }
+.menu-list .danger-wrap { display: block; }
+@media (max-width: 600px) {
+  .person-row { grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-areas: 'avatar body actions' '. amt amt'; row-gap: 6px; }
+  .person-row .amt { flex-direction: row; align-items: baseline; gap: 8px; min-width: 0; justify-content: flex-start; }
+}
