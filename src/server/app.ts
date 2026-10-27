@@ -180,12 +180,12 @@ export async function createApp(opts: AppOptions) {
   });
 
   // --- view-only share links ----------------------------------------------------------------
-  route('POST', '/api/shares', 'user', async (c) => db.createShare({ token: randomToken(18), trip_id: int(c.body.trip_id, 'Trip'), label: optStr(c.body.label), created_by: c.user!.id }));
+  route('POST', '/api/shares', 'user', async (c) => db.createShare({ token: randomToken(18), trip_id: c.body.trip_id == null || c.body.trip_id === '' ? null : int(c.body.trip_id, 'Trip'), person_id: c.body.person_id == null || c.body.person_id === '' ? null : int(c.body.person_id, 'Person'), label: optStr(c.body.label), created_by: c.user!.id }));
   route('DELETE', '/api/shares/:id', 'user', async (c) => (await db.revokeShare(Number(c.params.id)), { ok: true }));
   route('GET', '/api/shared/:token', 'public', async (c) => {
     const share = await db.getShare(c.params.token ?? '');
     if (!share) throw new HttpError(404, 'This link has been turned off or never existed.');
-    return db.loadSharedState(share.trip_id);
+    return db.loadSharedState(share);
   });
 
   // --- ledger ---------------------------------------------------------------------------------

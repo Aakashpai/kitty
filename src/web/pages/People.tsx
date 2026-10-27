@@ -4,6 +4,7 @@ import { computeHomeBalances, formatAmount, pairwiseDebts, type Invite, type Per
 import { api, errorText } from '../api.ts';
 import { copyText, useLedger } from '../store.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
+import { ShareModal } from './Trips.tsx';
 
 export function People() {
   const { state, balances, reload, me, user, rateCtx } = useLedger();
@@ -11,6 +12,7 @@ export function People() {
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: number; name: string; upi: string } | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
+  const [sharing, setSharing] = useState<Person | null>(null);
   const [busy, guard] = useBusy();
   const isOwner = user?.role === 'owner';
   const home = rateCtx.home;
@@ -111,6 +113,7 @@ export function People() {
                     <summary aria-label={`More actions for ${p.name}`}><MoreHorizontal /></summary>
                     <div className="menu-list" onClick={(e) => { (e.currentTarget.closest('details') as HTMLDetailsElement).open = false; }}>
                       <button className="small ghost" onClick={() => setEditing({ id: p.id, name: p.name, upi: p.upi_id ?? '' })}>Rename / UPI ID</button>
+                      {!p.is_me && <button className="small ghost" onClick={() => setSharing(p)} data-testid={`share-person-${p.id}`}>Share their view</button>}
                       {!p.is_me && <button className="small ghost" disabled={busy} onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
                       {!p.is_me && <DangerButton confirm={`Delete ${p.name}? Only possible if they have no transactions.`} onConfirm={() => run(() => api('DELETE', `/api/people/${p.id}`))}>Delete</DangerButton>}
                     </div>
@@ -157,6 +160,7 @@ export function People() {
           <div className="panel-foot">Everyone who signs in shares this ledger and sees balances from their own point of view. Send an invite link privately; whoever opens it first gets that person's seat.</div>
         </div>
       )}
+      {sharing && <ShareModal person={sharing} onClose={() => setSharing(null)} />}
     </div>
   );
 }

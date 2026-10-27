@@ -47,7 +47,7 @@ export function TxList({ txs, onSelect, showTrip = true }: { txs: Tx[]; onSelect
   return (
     <div className="txlist" data-testid="tx-list">
       {txs.map((tx) => {
-        const mine = l.readOnly ? null : myImpact(tx, l);
+        const mine = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l);
         const trip = tx.trip_id != null ? l.trips.get(tx.trip_id) : null;
         const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, showTrip && trip?.name].filter(Boolean).join(' · ');
         return (

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Banknote, ChevronLeft, Copy, Link2, Pencil, Plus, Trash2 } from 'lucide-react';
-import { computeBalances, formatAmount, shareOf, spendingBy, type Id, type Share, type Trip, type Tx } from '../../engine/index.ts';
+import { computeBalances, formatAmount, shareOf, spendingBy, type Id, type Person, type Share, type Trip, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
@@ -95,18 +95,18 @@ function TripCard({ trip }: { trip: Trip }) {
 }
 
 /** Share links for one trip: create, copy, revoke. */
-function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
+export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Person; onClose: () => void }) {
   const { state, reload } = useLedger();
   const [label, setLabel] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [simple, setSimple] = useState(false);
   const [busy, run] = useBusy();
-  const links = state.shares.filter((x) => x.trip_id === trip.id);
-  const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}${simple ? '/simple' : ''}`;
+  const links = state.shares.filter((x) => (person ? x.person_id === person.id : x.trip_id === trip?.id && x.person_id == null));
+  const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}${simple || person ? '/simple' : ''}`;
   const create = () => run(async () => {
     try {
-      await api('POST', '/api/shares', { trip_id: trip.id, label: label || null });
+      await api('POST', '/api/shares', { trip_id: trip?.id ?? null, person_id: person?.id ?? null, label: label || null });
       setLabel('');
       await reload();
       setErr(null);
@@ -128,10 +128,10 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
     window.setTimeout(() => setCopied(null), 1500);
   };
   return (
-    <Modal title={`Share ${trip.name}`} onClose={onClose}>
+    <Modal title={`Share ${trip?.name ?? person?.name ?? ''}`} onClose={onClose}>
       <div className="stack">
-        <p className="muted small">Anyone with a link sees this trip’s expenses, balances and settlement plan. They cannot edit anything, and your accounts stay private. Turn a link off any time.</p>
-        <label className="row small simple-check"><input type="checkbox" checked={simple} onChange={(e) => setSimple(e.target.checked)} data-testid="share-simple" />Copy links as the simple view (easier to read on a phone; viewers can switch)</label>
+        <p className="muted small">{person ? `Anyone with the link sees only the entries ${person.name} is part of, their share of each one, and what they owe or are owed. Nothing can be edited and your accounts stay private.` : 'Anyone with a link sees this trip’s expenses, balances and settlement plan. They cannot edit anything, and your accounts stay private. Turn a link off any time.'}</p>
+        {!person && <label className="row small simple-check"><input type="checkbox" checked={simple} onChange={(e) => setSimple(e.target.checked)} data-testid="share-simple" />Copy links as the simple view (easier to read on a phone; viewers can switch)</label>}
         {links.length > 0 && (
           <div className="panel">
             <div className="table-wrap">

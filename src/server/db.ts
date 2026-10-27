@@ -133,6 +133,21 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE people ADD COLUMN upi_id TEXT;
   `,
+  `
+  CREATE TABLE shares_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    trip_id INTEGER REFERENCES trips(id) ON DELETE CASCADE,
+    person_id INTEGER REFERENCES people(id) ON DELETE CASCADE,
+    label TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revoked INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO shares_v2 (id, token, trip_id, label, created_by, created_at, revoked) SELECT id, token, trip_id, label, created_by, created_at, revoked FROM shares;
+  DROP TABLE shares;
+  ALTER TABLE shares_v2 RENAME TO shares;
+  `,
 ];
 
 const parseRates = (v: unknown): Record<string, number> | null => {
@@ -318,15 +333,21 @@ export async function openDb(url: string, authToken?: string) {
       }
       return state;
     },
-    /** Read-only view of one trip: no accounts, no personal money movements, no history. */
-    loadSharedState: async (tripId: Id): Promise<LedgerState> => {
+    /** Read-only view for a share link: one trip, or one person's entries across trips. No accounts, no personal money movements, no history. */
+    loadSharedState: async (share: { trip_id: Id | null; person_id: Id | null }): Promise<LedgerState> => {
+      const { trip_id: tripId, person_id: personId } = share;
+      const scope = ["type IN ('expense','refund','repayment')"];
+      const args: number[] = [];
+      if (tripId != null) { scope.push('trip_id = ?'); args.push(tripId); }
+      if (personId != null) { scope.push('(payer_id = ? OR payee_id = ? OR id IN (SELECT tx_id FROM splits WHERE person_id = ?))'); args.push(personId, personId, personId); }
+      const where = scope.join(' AND ');
       let rs;
       try {
         rs = await client.batch([
-          { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips WHERE id = ?', args: [tripId] },
-          { sql: 'SELECT person_id FROM trip_members WHERE trip_id = ? ORDER BY person_id', args: [tripId] },
-          { sql: "SELECT * FROM transactions WHERE trip_id = ? AND type IN ('expense','refund','repayment') ORDER BY date DESC, id DESC", args: [tripId] },
-          { sql: 'SELECT tx_id, person_id, amount, input FROM splits WHERE tx_id IN (SELECT id FROM transactions WHERE trip_id = ?) ORDER BY person_id', args: [tripId] },
+          { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips ORDER BY id' },
+          { sql: 'SELECT trip_id, person_id FROM trip_members ORDER BY person_id' },
+          { sql: `SELECT * FROM transactions WHERE ${where} ORDER BY date DESC, id DESC`, args },
+          { sql: `SELECT tx_id, person_id, amount, input FROM splits WHERE tx_id IN (SELECT id FROM transactions WHERE ${where}) ORDER BY person_id`, args },
           { sql: 'SELECT key, value FROM settings' },
           { sql: 'SELECT id, name, is_me, archived, upi_id FROM people ORDER BY is_me DESC, LOWER(name)' },
         ], 'read');
@@ -334,11 +355,15 @@ export async function openDb(url: string, authToken?: string) {
         throw friendly(e);
       }
       const rows = <T>(i: number): T[] => (rs[i]?.rows ?? []) as unknown as T[];
-      const trip = rows<Trip>(0)[0];
-      if (!trip) throw new HttpError(404, 'This link no longer works');
-      trip.members = rows<{ person_id: Id }>(1).map((m) => m.person_id);
-      trip.rates = parseRates(trip.rates as unknown);
       const transactions = rows<Tx>(2);
+      const members = rows<{ trip_id: Id; person_id: Id }>(1);
+      const used = new Set(transactions.map((t) => t.trip_id));
+      const trips = rows<Trip>(0).filter((t) => (tripId != null ? t.id === tripId : used.has(t.id)));
+      if (tripId != null && !trips.length) throw new HttpError(404, 'This link no longer works');
+      for (const trip of trips) {
+        trip.members = members.filter((m) => m.trip_id === trip.id).map((m) => m.person_id);
+        trip.rates = parseRates(trip.rates as unknown);
+      }
       const byTx = new Map<Id, Tx['splits']>();
       for (const sp of rows<Tx['splits'][number] & { tx_id: Id }>(3)) {
         let list = byTx.get(sp.tx_id);
@@ -351,18 +376,24 @@ export async function openDb(url: string, authToken?: string) {
         tx.from_amount = tx.to_amount = null;
         tx.reference = tx.notes = null;
       }
+      const people = rows<Person>(5);
+      if (personId != null) {
+        if (!people.some((p) => p.id === personId)) throw new HttpError(404, 'This link no longer works');
+        for (const p of people) p.is_me = p.id === personId ? 1 : 0; // the page speaks to them
+      }
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       return {
-        settings: { home_currency: setting('home_currency') ?? trip.currency, rates: parseRates(setting('rates')) ?? {} },
-        people: rows<Person>(5),
+        settings: { home_currency: setting('home_currency') ?? trips[0]?.currency ?? 'USD', rates: parseRates(setting('rates')) ?? {} },
+        people,
         accounts: [],
-        trips: [trip],
+        trips,
         transactions,
         reconciliations: [],
         activity: [],
         shares: [],
         user: null,
+        shared_person_id: personId,
       };
     },
     getSetting: (key: string) => read(async (t) => (await t.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key]))?.value ?? null),
@@ -385,6 +416,7 @@ export async function openDb(url: string, authToken?: string) {
       if (await t.get('SELECT 1 FROM users WHERE person_id = ?', [id])) throw new HttpError(409, `${p.name} has a login. Remove their access first.`);
       await t.run('DELETE FROM invites WHERE person_id = ?', [id]);
       await t.run('DELETE FROM trip_members WHERE person_id = ?', [id]);
+      await t.run('DELETE FROM shares WHERE person_id = ?', [id]);
       await t.run('DELETE FROM people WHERE id = ?', [id]);
       await logIn(t, 'delete', 'person', id, `Deleted ${p.name}`, p);
     }),
@@ -504,10 +536,12 @@ export async function openDb(url: string, authToken?: string) {
     deleteInvite: (id: Id) => inTx(async (t) => {
       if (!(await t.run('DELETE FROM invites WHERE id = ?', [id])).changes) throw new HttpError(404, 'Invite not found');
     }),
-    createShare: (s: { token: string; trip_id: Id; label: string | null; created_by: Id }) => inTx(async (t) => {
-      if (!(await t.get('SELECT 1 FROM trips WHERE id = ?', [s.trip_id]))) throw new HttpError(404, 'Trip not found');
-      const row = (await t.get<{ id: number }>('INSERT INTO shares (token, trip_id, label, created_by) VALUES (?, ?, ?, ?) RETURNING id', [s.token, s.trip_id, s.label, s.created_by]))!;
-      await logIn(t, 'create', 'share', row.id, `Created a view-only link for trip #${s.trip_id}`);
+    createShare: (s: { token: string; trip_id: Id | null; person_id: Id | null; label: string | null; created_by: Id }) => inTx(async (t) => {
+      if (s.trip_id == null && s.person_id == null) throw new HttpError(400, 'Pick a trip or a person to share');
+      if (s.trip_id != null && !(await t.get('SELECT 1 FROM trips WHERE id = ?', [s.trip_id]))) throw new HttpError(404, 'Trip not found');
+      if (s.person_id != null && !(await t.get('SELECT 1 FROM people WHERE id = ?', [s.person_id]))) throw new HttpError(404, 'Person not found');
+      const row = (await t.get<{ id: number }>('INSERT INTO shares (token, trip_id, person_id, label, created_by) VALUES (?, ?, ?, ?, ?) RETURNING id', [s.token, s.trip_id, s.person_id, s.label, s.created_by]))!;
+      await logIn(t, 'create', 'share', row.id, s.person_id != null ? `Created a view-only link for person #${s.person_id}` : `Created a view-only link for trip #${s.trip_id}`);
       return (await t.get<Share>('SELECT * FROM shares WHERE id = ?', [row.id]))!;
     }),
     getShare: (token: string) => read((t) => t.get<Share>('SELECT * FROM shares WHERE token = ? AND revoked = 0', [token])),

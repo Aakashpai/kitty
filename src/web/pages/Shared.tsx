@@ -7,26 +7,28 @@ import { SimpleView } from './Simple.tsx';
 import { APP_NAME, Logo, fmtDate } from '../components/ui.tsx';
 
 function SharedInner({ token, simple }: { token: string; simple: boolean }) {
-  const { state } = useLedger();
+  const { state, me } = useLedger();
+  const [scope, setScope] = useState('');
+  const person = state.shared_person_id != null ? me : null;
   const trip = state.trips[0];
-  if (!trip) return null;
+  if (!person && !trip) return null;
   return (
     <div className="shared">
       <header className="shared-head">
         <span className="brand" style={{ padding: 0 }}><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></span>
         <span className="row">
-          <a className="btn" href={simple ? `#/s/${token}` : `#/s/${token}/simple`} data-testid="shared-toggle">{simple ? 'Full view' : 'Simple view'}</a>
+          {!person && <a className="btn" href={simple ? `#/s/${token}` : `#/s/${token}/simple`} data-testid="shared-toggle">{simple ? 'Full view' : 'Simple view'}</a>}
           <span className="badge">View only</span>
         </span>
       </header>
-      <main className={simple ? 'main simple-main' : 'main'} style={{ margin: '0 auto' }}>
+      <main className={simple || person ? 'main simple-main' : 'main'} style={{ margin: '0 auto' }}>
         <div className="page-head">
           <div>
-            <h1>{trip.name}</h1>
-            <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
+            <h1>{person ? person.name : trip!.name}</h1>
+            <div className="sub">{person ? 'Only the entries you are part of, and where things stand' : `${trip!.start_date ? `${fmtDate(trip!.start_date)} – ${fmtDate(trip!.end_date)} · ` : ''}${trip!.currency}${trip!.notes ? ` · ${trip!.notes}` : ''}`}</div>
           </div>
         </div>
-        {simple ? <SimpleView scope={String(trip.id)} /> : <TripView trip={trip} />}
+        {person ? <SimpleView scope={scope} onScope={setScope} /> : simple ? <SimpleView scope={String(trip!.id)} /> : <TripView trip={trip!} />}
         <p className="faint small" style={{ marginTop: 24 }}>Shared read-only. Amounts stay in the currency they were spent in; nothing here can be edited.</p>
       </main>
     </div>

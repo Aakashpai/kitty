@@ -145,7 +145,8 @@ export interface Invite {
 export interface Share {
   id: Id;
   token: string;
-  trip_id: Id;
+  trip_id: Id | null; // one trip, or null for everything
+  person_id: Id | null; // when set, the link shows only this person's entries and position
   label: string | null;
   created_by: Id | null;
   created_at: string;
@@ -158,6 +159,7 @@ export interface LedgerState extends LedgerCtx {
   activity: Activity[];
   shares: Share[];
   user: UserPublic | null; // who is signed in (null for shared read-only views)
+  shared_person_id?: Id | null; // person share links: whose point of view the page takes
   users?: UserPublic[]; // owner only
   invites?: Invite[]; // owner only
 }
