@@ -251,6 +251,7 @@ export async function createApp(opts: AppOptions) {
   });
   route('GET', '/api/backup', 'owner', () => db.backup());
   route('POST', '/api/restore', 'owner', async (c) => (await db.restore(c.body), { ok: true }));
+  route('DELETE', '/api/activity', 'owner', async () => (await db.clearActivity(), { ok: true }));
   route('POST', '/api/snapshot', 'owner', async () => {
     const file = join(resolve('backups'), `ledger-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
     await db.snapshot(file);

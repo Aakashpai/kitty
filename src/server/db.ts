@@ -522,6 +522,8 @@ export async function openDb(url: string, authToken?: string) {
       return out;
     }),
     /** Replaces everything with the contents of a backup, atomically. Logins are kept unless the backup has its own. */
+    clearActivity: () => inTx(async (t) => { await t.run('DELETE FROM activity'); }),
+
     restore: (data: Record<string, unknown>) => inTx(async (t) => {
       if (data.format !== 'ledger-backup' || !Array.isArray(data.people) || !Array.isArray(data.transactions)) throw new HttpError(400, 'Not a ledger backup file');
       const tables = BACKUP_TABLES.filter((name) => Array.isArray(data[name]) || !['users', 'invites', 'shares'].includes(name));

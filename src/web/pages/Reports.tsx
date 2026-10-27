@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
-import { Database, Download, Upload } from 'lucide-react';
+import { Database, Download, Eraser, Upload } from 'lucide-react';
 import { effectsOf, formatAmount, homeValue, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
-import { ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
+import { DangerButton, ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
@@ -167,6 +167,7 @@ export function Reports() {
             <label className="btn">
               <Upload />Restore from backup… <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); }} data-testid="restore-file" />
             </label>
+            <DangerButton small={false} confirm="Clear the whole activity log? Per-transaction history and delete snapshots go with it." onConfirm={async () => { await api('DELETE', '/api/activity'); await reload(); setMsg('Activity log cleared.'); setErr(null); }}><Eraser />Clear activity log</DangerButton>
           </div>
           {msg && <div className="ok-box">{msg}</div>}
           <ErrorBox error={err} />
