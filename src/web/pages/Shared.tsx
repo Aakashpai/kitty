@@ -3,9 +3,10 @@ import type { LedgerState } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { LedgerProvider, useLedger } from '../store.tsx';
 import { TripView } from './Trips.tsx';
+import { SimpleView } from './Simple.tsx';
 import { APP_NAME, Logo, fmtDate } from '../components/ui.tsx';
 
-function SharedInner() {
+function SharedInner({ token, simple }: { token: string; simple: boolean }) {
   const { state } = useLedger();
   const trip = state.trips[0];
   if (!trip) return null;
@@ -13,23 +14,26 @@ function SharedInner() {
     <div className="shared">
       <header className="shared-head">
         <span className="brand" style={{ padding: 0 }}><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></span>
-        <span className="badge">View only</span>
+        <span className="row">
+          <a className="btn" href={simple ? `#/s/${token}` : `#/s/${token}/simple`} data-testid="shared-toggle">{simple ? 'Full view' : 'Simple view'}</a>
+          <span className="badge">View only</span>
+        </span>
       </header>
-      <main className="main" style={{ margin: '0 auto' }}>
+      <main className={simple ? 'main simple-main' : 'main'} style={{ margin: '0 auto' }}>
         <div className="page-head">
           <div>
             <h1>{trip.name}</h1>
             <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
           </div>
         </div>
-        <TripView trip={trip} />
+        {simple ? <SimpleView scope={String(trip.id)} /> : <TripView trip={trip} />}
         <p className="faint small" style={{ marginTop: 24 }}>Shared read-only. Amounts stay in the currency they were spent in; nothing here can be edited.</p>
       </main>
     </div>
   );
 }
 
-export function SharedPage({ token }: { token: string }) {
+export function SharedPage({ token, simple = false }: { token: string; simple?: boolean }) {
   const [state, setState] = useState<LedgerState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -46,7 +50,7 @@ export function SharedPage({ token }: { token: string }) {
   if (!state) return <div className="center-box"><span className="pulse" aria-hidden /><p className="muted">Opening the shared trip…</p></div>;
   return (
     <LedgerProvider initialState={state} readOnly>
-      <SharedInner />
+      <SharedInner token={token} simple={simple} />
     </LedgerProvider>
   );
 }

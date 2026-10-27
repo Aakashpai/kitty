@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Plane, Plus, Scale, Sun, Users, Wallet, type LucideIcon } from 'lucide-react';
+import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, type LucideIcon } from 'lucide-react';
 import type { TxInput, Tx } from '../engine/index.ts';
 import { LedgerProvider, useLedger } from './store.tsx';
 import { useRoute } from './router.tsx';
@@ -15,6 +15,7 @@ import { Imports } from './pages/Imports.tsx';
 import { Reports } from './pages/Reports.tsx';
 import { InviteAccept } from './pages/Auth.tsx';
 import { SharedPage } from './pages/Shared.tsx';
+import { SimpleView } from './pages/Simple.tsx';
 import { TxFormCtx, type OpenTxForm } from './components/txFormContext.ts';
 import { APP_NAME, Avatar, Logo, hueStyle } from './components/ui.tsx';
 import { AccountModal } from './components/AccountModal.tsx';
@@ -39,12 +40,21 @@ const useTheme = () => {
   return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))] as const;
 };
 
+/** "Simple view": one phone-friendly page instead of the full app. Off by default; remembered per device. */
+const useSimple = () => {
+  const [simple, setSimple] = useState(() => { try { return localStorage.getItem('view-mode') === 'simple'; } catch { return false; } });
+  const toggle = () => setSimple((s) => { try { localStorage.setItem('view-mode', s ? 'full' : 'simple'); } catch { /* private mode */ } return !s; });
+  return [simple, toggle] as const;
+};
+
 function Shell() {
   const { section, id, path } = useRoute();
   const { state, user, logout } = useLedger();
   const [theme, toggleTheme] = useTheme();
   const [form, setForm] = useState<{ initial?: Partial<TxInput>; existing?: Tx; onSaved?: (tx: Tx) => void } | null>(null);
   const [account, setAccount] = useState(false);
+  const [simple, toggleSimple] = useSimple();
+  const [scope, setScope] = useState('');
   const open: OpenTxForm = (opts = {}) => setForm(opts);
 
   // "N" opens the form from anywhere, unless the user is typing or a dialog is already up.
@@ -75,6 +85,20 @@ function Shell() {
   const trips = state.trips.filter((t) => !t.archived);
   return (
     <TxFormCtx.Provider value={open}>
+      {simple ? (
+        <div className="simple-app">
+          <header className="shared-head">
+            <a className="brand" href="#/" style={{ padding: 0 }}><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></a>
+            <span className="row">
+              <button className="ghost small" onClick={toggleSimple} data-testid="simple-toggle"><LayoutGrid />Full view</button>
+              <button className="ghost icon small" onClick={toggleTheme} aria-label="Toggle theme" data-testid="theme-toggle">{theme === 'dark' ? <Sun /> : <Moon />}</button>
+              {user && <button className="ghost icon small" onClick={() => void logout()} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>}
+            </span>
+          </header>
+          <main className="main simple-main"><SimpleView scope={scope} onScope={setScope} /></main>
+          <button className="primary fab" onClick={() => open()} aria-label="Add transaction"><Plus />Add</button>
+        </div>
+      ) : (
       <div className="app">
         <aside className="sidebar">
           <a className="brand" href="#/"><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></a>
@@ -95,6 +119,7 @@ function Shell() {
           <div className="sidebar-foot">
             <button className="primary add-side" onClick={() => open()} data-testid="add-transaction"><Plus />Add transaction</button>
             <span className="shortcut">Press <kbd className="kbd">N</kbd> to add</span>
+            <button className="ghost theme-toggle" onClick={toggleSimple} title="Simple view" data-testid="simple-toggle"><Smartphone /><span className="label">Simple view</span></button>
             <button className="ghost theme-toggle" onClick={toggleTheme} aria-label="Toggle theme" data-testid="theme-toggle">
               {theme === 'dark' ? <Sun /> : <Moon />}<span className="label">{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
             </button>
@@ -110,6 +135,7 @@ function Shell() {
         <main className="main">{page}</main>
         <button className="primary fab" onClick={() => open()} aria-label="Add transaction"><Plus />Add</button>
       </div>
+      )}
       {account && <AccountModal onClose={() => setAccount(false)} />}
       {form && (
         <TxForm
@@ -129,7 +155,7 @@ function Shell() {
 export function App() {
   const { section, parts } = useRoute();
   if (section === 'invite' && parts[1]) return <ErrorBoundary><InviteAccept token={parts[1]} /></ErrorBoundary>;
-  if (section === 's' && parts[1]) return <ErrorBoundary><SharedPage token={parts[1]} /></ErrorBoundary>;
+  if (section === 's' && parts[1]) return <ErrorBoundary><SharedPage token={parts[1]} simple={parts[2] === 'simple'} /></ErrorBoundary>;
   return (
     <ErrorBoundary>
       <LedgerProvider>

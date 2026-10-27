@@ -100,9 +100,10 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
   const [label, setLabel] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
+  const [simple, setSimple] = useState(false);
   const [busy, run] = useBusy();
   const links = state.shares.filter((x) => x.trip_id === trip.id);
-  const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}`;
+  const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}${simple ? '/simple' : ''}`;
   const create = () => run(async () => {
     try {
       await api('POST', '/api/shares', { trip_id: trip.id, label: label || null });
@@ -130,6 +131,7 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
     <Modal title={`Share ${trip.name}`} onClose={onClose}>
       <div className="stack">
         <p className="muted small">Anyone with a link sees this trip’s expenses, balances and settlement plan. They cannot edit anything, and your accounts stay private. Turn a link off any time.</p>
+        <label className="row small simple-check"><input type="checkbox" checked={simple} onChange={(e) => setSimple(e.target.checked)} data-testid="share-simple" />Copy links as the simple view (easier to read on a phone; viewers can switch)</label>
         {links.length > 0 && (
           <div className="panel">
             <div className="table-wrap">
