@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
 import { TX_TYPES, type Tx, type TxType } from '../../engine/index.ts';
+import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
-import { Field, TYPE_LABEL, TripMark, hueStyle } from '../components/ui.tsx';
+import { DangerButton, ErrorBox, Field, Money, TYPE_LABEL, TripMark, TypeIcon, fmtDate, hueStyle } from '../components/ui.tsx';
 
 type Sort = 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc';
 
@@ -26,7 +27,8 @@ export function ScopeSeg({ value, onChange, testId }: { value: string; onChange:
 export const inScope = (t: Tx, scope: string) => (scope === '' ? true : scope === 'none' ? t.trip_id == null : t.trip_id === Number(scope));
 
 export function Transactions() {
-  const { state } = useLedger();
+  const { state, reload } = useLedger();
+  const [err, setErr] = useState<string | null>(null);
   const openForm = useTxForm();
   const [q, setQ] = useState('');
   const [type, setType] = useState<TxType | ''>('');
@@ -67,6 +69,26 @@ export function Transactions() {
         <div><h1>Transactions</h1><div className="sub">{txs.length} of {state.transactions.length}{scopedTrip ? ` · ${scopedTrip.name}` : scope === 'none' ? ' · personal only' : ''}</div></div>
         <button className="primary" onClick={() => openForm(scopedTrip ? { initial: { trip_id: scopedTrip.id, currency: scopedTrip.currency } } : {})}><Plus />Add transaction</button>
       </div>
+      {(state.recurring ?? []).length > 0 && (
+        <div className="panel" data-testid="recurring-panel">
+          <div className="panel-head"><h3>Repeating</h3><span className="faint small">Added automatically on each date</span></div>
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {(state.recurring ?? []).map((r) => (
+                  <tr key={r.id}>
+                    <td><span className="who"><TypeIcon type={r.template.type} category={r.template.category} small />{r.template.description || TYPE_LABEL[r.template.type]}</span></td>
+                    <td className="num"><Money amount={r.template.amount} currency={r.template.currency} /></td>
+                    <td className="muted">{r.every === 'weekly' ? 'Every week' : 'Every month'} · next {fmtDate(r.next_date)}</td>
+                    <td className="actions"><DangerButton confirm="Stop repeating? Entries already added stay." onConfirm={async () => { try { await api('DELETE', `/api/recurring/${r.id}`); await reload(); } catch (e) { setErr(errorText(e)); } }}>Stop</DangerButton></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ErrorBox error={err} />
+        </div>
+      )}
       <ScopeSeg value={scope} onChange={setScope} testId="tx-scope" />
       <div className="panel pad form-grid">
         <div className="field span-2">

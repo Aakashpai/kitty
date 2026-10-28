@@ -1,5 +1,6 @@
 import { shareOf, type Tx } from '../../engine/index.ts';
 import { useLedger, type Ledger } from '../store.tsx';
+import { Paperclip } from 'lucide-react';
 import { Empty, Money, TYPE_LABEL, TypeIcon, fmtShort } from './ui.tsx';
 
 export function txWho(tx: Tx, l: Ledger): string {
@@ -47,18 +48,20 @@ export function myImpact(tx: Tx, l: Ledger, as: number = l.me.id): { amount: num
 export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSelect: (tx: Tx) => void; showTrip?: boolean; as?: number }) {
   const l = useLedger();
   if (!txs.length) return <Empty title="Nothing here yet">Transactions you record will show up in this list.</Empty>;
+  const withReceipt = new Set(l.state.receipts?.map((r) => r.tx_id));
   return (
     <div className="txlist" data-testid="tx-list">
       {txs.map((tx) => {
         const mine = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l, as);
         const trip = tx.trip_id != null ? l.trips.get(tx.trip_id) : null;
-        const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, showTrip && trip?.name].filter(Boolean).join(' · ');
+        const by = !l.readOnly && tx.added_by != null && tx.added_by !== l.me.id ? `by ${l.who(tx.added_by)}` : null;
+        const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, showTrip && trip?.name, by].filter(Boolean).join(' · ');
         return (
           <button type="button" key={tx.id} className="txrow" onClick={() => onSelect(tx)} data-testid={`tx-row-${tx.id}`}>
             <TypeIcon type={tx.type} category={tx.category} />
             <span className="body">
               <span className="title">{tx.description || TYPE_LABEL[tx.type]}</span>
-              <span className="meta">{meta}</span>
+              <span className="meta">{withReceipt.has(tx.id) && <Paperclip className="clip" aria-label="Has a receipt photo" />}{meta}</span>
             </span>
             <span className="amt">
               <span className="amount"><Money amount={tx.amount} currency={tx.currency} /></span>

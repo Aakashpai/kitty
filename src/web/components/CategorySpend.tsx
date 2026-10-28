@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, HandCoins, Undo2 } from 'lucide-react';
-import { homeSpendingBy, type Id, type Tx } from '../../engine/index.ts';
+import { homeSpendingBy, type Id, type TripBudget, type Tx } from '../../engine/index.ts';
 import { CATEGORIES, categoryOf, useLedger } from '../store.tsx';
-import { CategoryGlyph, MoneyList } from './ui.tsx';
+import { BudgetBar, CategoryGlyph, MoneyList } from './ui.tsx';
 
 /** A picked row of the table: its label and which entries sit behind it. */
 export interface CategoryPick {
@@ -28,8 +28,9 @@ const sum = (groups: Map<string, Map<string, number>>) => {
  * row, then repayments below the total in the currency that changed hands. Selecting a row picks it (again to clear),
  * so the caller can list the entries behind it. `compact` opens on the total alone, with the breakdown one tap away.
  */
-export function CategorySpend({ txs, person, label = 'You', everyone = true, compact = false, selected, onSelect }: {
+export function CategorySpend({ txs, person, label = 'You', everyone = true, compact = false, budget, selected, onSelect }: {
   txs: Tx[];
+  budget?: TripBudget | null; // the group's plan, shown under the Everyone figures
   person?: Id;
   label?: string;
   everyone?: boolean;
@@ -61,11 +62,16 @@ export function CategorySpend({ txs, person, label = 'You', everyone = true, com
     : [{ label: 'Repayments', match: isRepayment, all: repaid(isRepayment) }];
   const visible = repayRows.filter((r) => [r.all, r.mine].some((m) => m && [...m.values()].some((v) => v !== 0)));
   const pick = (p: CategoryPick) => onSelect(selected === p.label ? null : p);
-  const cell = (m?: Map<string, number>) => <MoneyList map={m ?? new Map()} />;
+  const cell = (m?: Map<string, number>, limit?: number | null) => (
+    <>
+      <MoneyList map={m ?? new Map()} />
+      {limit != null && <BudgetBar spent={m?.get(rateCtx.home) ?? 0} limit={limit} currency={rateCtx.home} />}
+    </>
+  );
   const row = (p: CategoryPick, icon: ReactNode, a?: Map<string, number>, b?: Map<string, number>) => (
     <tr key={p.label} className={`clickable ${selected === p.label ? 'on' : ''}`} tabIndex={0} role="button" aria-pressed={selected === p.label} onClick={() => pick(p)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p); } }} data-testid={`category-${p.label}`}>
       <td><span className="who">{icon}{p.label}</span></td>
-      {everyone && <td className="num">{cell(a)}</td>}
+      {everyone && <td className="num">{cell(a, budget?.categories[p.label])}</td>}
       {mine && <td className="num">{cell(b)}</td>}
     </tr>
   );
@@ -79,7 +85,7 @@ export function CategorySpend({ txs, person, label = 'You', everyone = true, com
             {open && cats.map((c) => row({ label: c, match: (t) => (t.type === 'expense' || t.type === 'refund') && spendKey(t) === c }, c === REFUNDS ? <Undo2 className="cat-glyph" aria-hidden /> : <CategoryGlyph category={c} />, all.get(c), mine?.get(c)))}
           </tbody>
           <tfoot>
-            <tr><td>Total spent</td>{everyone && <td className="num">{cell(sum(all))}</td>}{mine && <td className="num" data-testid="category-mine-total">{cell(sum(mine))}</td>}</tr>
+            <tr><td>Total spent</td>{everyone && <td className="num">{cell(sum(all), budget?.total)}</td>}{mine && <td className="num" data-testid="category-mine-total">{cell(sum(mine))}</td>}</tr>
             {open && visible.map((r) => row(r, <HandCoins className="cat-glyph" aria-hidden />, r.all, r.mine))}
           </tfoot>
         </table>

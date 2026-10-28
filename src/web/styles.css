@@ -208,6 +208,13 @@ tr.clickable.on td { background: var(--surface-2); }
 .cat-glyph.tint { color: hsl(var(--h) 70% var(--cat-fg)); }
 .chip .cat-glyph { width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; }
 .chip.on .cat-glyph { color: inherit; }
+.chips[data-testid='recent'] .chip { max-width: 100%; min-width: 0; }
+.chips[data-testid='recent'] .chip { overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 26px; }
+.txrow .clip { width: 11px; height: 11px; vertical-align: -1px; margin-right: 4px; }
+.receipts { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.receipt { position: relative; }
+.receipt img { width: 88px; height: 88px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); display: block; background: var(--surface-2); }
+.receipt button { position: absolute; top: 2px; right: 2px; background: var(--surface); }
 .chips .chip-input { height: 28px; width: 120px; padding: 0 11px; border-radius: 999px; font-size: 12.5px; }
 .ticon.sm { width: 26px; height: 26px; border-radius: 8px; }
 .ticon.sm svg { width: 14px; height: 14px; }
@@ -296,6 +303,12 @@ input[type='date'] { font-family: var(--mono); font-size: 13px; }
 .money-list { display: inline-flex; flex-wrap: wrap; gap: 2px 12px; }
 .meter { height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; min-width: 60px; }
 .meter > i { display: block; height: 100%; border-radius: 2px; background: var(--text-2); }
+.meter.over > i { background: var(--neg); }
+.budget { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; margin-top: 4px; }
+.budget .meter { width: 100%; max-width: 160px; }
+.stat .budget { align-items: stretch; }
+.stat .budget .meter { max-width: none; }
+.budget .neg { color: var(--neg); }
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; font-size: 13.5px; margin: 0; }
 .kv dt { color: var(--text-3); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }

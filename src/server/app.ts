@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
-import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type LedgerState, type Trip, type UserPublic } from '../engine/index.ts';
+import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type LedgerState, type Recurring, type Trip, type TripBudget, type UserPublic } from '../engine/index.ts';
 import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
@@ -16,7 +16,16 @@ interface Ctx {
 }
 type Handler = (c: Ctx) => unknown;
 type Access = 'public' | 'user' | 'owner';
-const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.png': 'image/png', '.woff2': 'font/woff2' };
+const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' };
+/** A reply that is not JSON (receipt photos). */
+class Raw {
+  type: string;
+  body: Buffer;
+  constructor(type: string, body: Buffer) {
+    this.type = type;
+    this.body = body;
+  }
+}
 const COOKIE = 'ledger_session';
 
 const str = (v: unknown, label: string, max = 100): string => {
@@ -60,6 +69,29 @@ const rates = (v: unknown): Record<string, number> | null => {
     out[code] = n;
   }
   return Object.keys(out).length ? out : null;
+};
+/** { total, categories: { Food: n } } in minor units of the home currency; blanks drop out, an all-blank budget is null. */
+const budget = (v: unknown): TripBudget | null => {
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const b = v as { total?: unknown; categories?: unknown };
+  const amount = (x: unknown, label: string): number | null => {
+    if (x == null || x === '') return null;
+    const n = int(x, label);
+    if (n <= 0) throw new HttpError(400, `${label} must be more than zero`);
+    return n;
+  };
+  const categories: Record<string, number> = {};
+  for (const [k, x] of Object.entries(b.categories && typeof b.categories === 'object' ? b.categories : {})) {
+    const n = amount(x, `${k} budget`);
+    if (n != null && k.trim()) categories[k.trim().slice(0, 40)] = n;
+  }
+  const total = amount(b.total, 'Budget');
+  return total != null || Object.keys(categories).length ? { total, categories } : null;
+};
+const repeat = (v: unknown): Recurring['every'] | null => {
+  if (v == null || v === '') return null;
+  if (v !== 'weekly' && v !== 'monthly') throw new HttpError(400, 'Repeat must be weekly or monthly');
+  return v;
 };
 const password = (v: unknown): string => {
   const s = String(v ?? '');
@@ -202,7 +234,8 @@ export async function createApp(opts: AppOptions) {
   });
 
   // --- ledger ---------------------------------------------------------------------------------
-  route('GET', '/api/state', 'user', (c) => db.loadState(c.user));
+  route('GET', '/api/state', 'user', (c) => db.loadState(c.user, true));
+  route('POST', '/api/seen', 'user', async (c) => (await db.markSeen(c.user!.id), { ok: true }));
   route('PUT', '/api/settings', 'owner', async (c) => {
     if (c.body.home_currency !== undefined) await db.setSetting('home_currency', currency(c.body.home_currency));
     if (c.body.rates !== undefined) await db.setSetting('rates', JSON.stringify(rates(c.body.rates) ?? {}));
@@ -240,7 +273,7 @@ export async function createApp(opts: AppOptions) {
     const start_date = b.start_date ? date(b.start_date, 'Start date') : null;
     const end_date = b.end_date ? date(b.end_date, 'End date') : null;
     if (start_date && end_date && end_date < start_date) throw new HttpError(400, 'End date is before the start date');
-    return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members, rates: rates(b.rates) };
+    return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members, rates: rates(b.rates), budget: budget(b.budget) };
   };
   route('POST', '/api/trips', 'owner', async (c) => db.createTrip(await tripBody(c)));
   route('PUT', '/api/trips/:id', 'owner', async (c) => (await db.updateTrip(Number(c.params.id), await tripBody(c)), { ok: true }));
@@ -257,11 +290,39 @@ export async function createApp(opts: AppOptions) {
     if (errors.length) throw new HttpError(422, 'Transaction is not valid', errors);
     return tx;
   };
-  route('POST', '/api/transactions', 'user', async (c) => db.createTx(await txBody(c)));
-  route('PUT', '/api/transactions/:id', 'user', async (c) => db.updateTx(Number(c.params.id), await txBody(c, Number(c.params.id))));
+  route('POST', '/api/transactions', 'user', async (c) => {
+    const tx = await txBody(c);
+    const every = repeat(c.body.repeat);
+    if (every && tx.type === 'refund') throw new HttpError(400, 'A refund cannot repeat');
+    return db.createTx(tx, c.user!.person_id, { client_ref: optStr(c.body.queue_ref)?.slice(0, 64), repeat: every });
+  });
+  route('PUT', '/api/transactions/:id', 'user', async (c) => db.updateTx(Number(c.params.id), await txBody(c, Number(c.params.id)), c.user!.person_id));
   const seeTx = (c: Ctx) => mustSee(c, (s) => s.transactions.some((t) => t.id === Number(c.params.id)), 'Transaction');
   route('DELETE', '/api/transactions/:id', 'user', async (c) => (await seeTx(c), await db.deleteTx(Number(c.params.id)), { ok: true }));
   route('GET', '/api/transactions/:id', 'user', async (c) => (await seeTx(c), db.getTx(Number(c.params.id))));
+  route('DELETE', '/api/recurring/:id', 'user', async (c) => {
+    await mustSee(c, (s) => !!s.recurring?.some((r) => r.id === Number(c.params.id)), 'Repeating entry');
+    return (await db.stopRecurring(Number(c.params.id)), { ok: true });
+  });
+
+  // Receipt photos arrive already shrunk by the browser, as a data URL.
+  route('POST', '/api/transactions/:id/receipts', 'user', async (c) => {
+    await seeTx(c);
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(String(c.body.data ?? ''));
+    if (!m) throw new HttpError(400, 'Attach a JPEG, PNG or WebP photo');
+    if (m[2]!.length > 3_000_000) throw new HttpError(413, 'That photo is too large');
+    return db.addReceipt(Number(c.params.id), m[1]!, m[2]!, c.user!.person_id);
+  });
+  route('GET', '/api/receipts/:id', 'user', async (c) => {
+    const r = await db.getReceipt(Number(c.params.id));
+    if (!r) throw new HttpError(404, 'Receipt not found');
+    await mustSee(c, (s) => s.transactions.some((t) => t.id === r.tx_id), 'Receipt');
+    return new Raw(r.mime, Buffer.from(r.data, 'base64'));
+  });
+  route('DELETE', '/api/receipts/:id', 'user', async (c) => {
+    await mustSee(c, (s) => !!s.receipts?.some((r) => r.id === Number(c.params.id)), 'Receipt');
+    return (await db.deleteReceipt(Number(c.params.id)), { ok: true });
+  });
 
   route('POST', '/api/reconciliations', 'user', async (c) => {
     const account_id = int(c.body.account_id, 'Account');
@@ -305,7 +366,12 @@ export async function createApp(opts: AppOptions) {
         const m = r.re.exec(url.pathname)!;
         const params = Object.fromEntries(r.keys.map((k, i) => [k, m[i + 1] ?? '']));
         const body = ['POST', 'PUT'].includes(req.method ?? '') ? await readJson(req) : {};
-        return send(200, await r.handler({ params, body, url, req, res, user }));
+        const out = await r.handler({ params, body, url, req, res, user });
+        if (out instanceof Raw) {
+          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'private, max-age=31536000, immutable' }); // a receipt never changes; removing it retires the id
+          return res.end(out.body);
+        }
+        return send(200, out);
       }
       if (!staticDir) return send(404, { error: 'Not found' });
       // Static SPA (built with `yarn build`); the dev server proxies /api instead.

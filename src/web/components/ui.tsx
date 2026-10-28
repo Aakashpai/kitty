@@ -89,6 +89,14 @@ export const TripMark = ({ name, children }: { name: string; children: ReactNode
   return flag ? <span className="flag" aria-hidden>{flag}</span> : <>{children}</>;
 };
 
+/** Spent against a budget: a bar that turns red past 100%, then what is left (or how far over). */
+export const BudgetBar = ({ spent, limit, currency }: { spent: number; limit: number; currency: string }) => (
+  <span className="budget" data-testid="budget-bar">
+    <span className={`meter${spent > limit ? ' over' : ''}`}><i style={{ width: `${Math.min(100, (Math.max(spent, 0) / limit) * 100)}%` }} /></span>
+    <span className={`small ${spent > limit ? 'neg' : 'faint'}`}>{spent > limit ? `${formatAmount(spent - limit, currency)} over` : `${formatAmount(limit - spent, currency)} left`} · budget {formatAmount(limit, currency)}</span>
+  </span>
+);
+
 /** Stable hue per entity id, so a person or trip keeps its colour everywhere. */
 export const hueOf = (id: number) => Math.round((id * 137.508) % 360);
 export const hueStyle = (id: number) => ({ '--h': hueOf(id) }) as CSSProperties;

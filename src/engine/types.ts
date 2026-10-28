@@ -36,6 +36,13 @@ export interface Trip {
   archived: 0 | 1;
   members: Id[];
   rates: Record<string, number> | null; // optional overrides: units of home currency per 1 unit of this currency
+  budget?: TripBudget | null;
+}
+
+/** What the group plans to spend on a trip, in minor units of the home currency: overall and/or per category. */
+export interface TripBudget {
+  total: number | null;
+  categories: Record<string, number>;
 }
 
 export interface Split {
@@ -86,9 +93,21 @@ export interface Tx {
   splits: Split[];
   created_at: string;
   updated_at: string;
+  added_by?: Id | null; // person who recorded it (null for entries from before this was tracked)
+  edited_by?: Id | null; // person who last changed it
+  recurring_id?: Id | null; // made by a repeating rule
 }
 
 export type TxInput = Omit<Tx, 'id' | 'created_at' | 'updated_at'> & { id?: Id };
+
+/** A repeating entry: `template` is copied on each `next_date` (weekly, or monthly on the same day of the month). */
+export interface Recurring {
+  id: Id;
+  every: 'weekly' | 'monthly';
+  next_date: string;
+  template: TxInput;
+  created_by: Id | null; // person
+}
 
 export interface Reconciliation {
   id: Id;
@@ -129,6 +148,7 @@ export interface UserPublic {
   role: 'owner' | 'member';
   person_id: Id | null;
   created_at: string;
+  seen_at?: string | null; // when they last dismissed "new from others"
 }
 
 export interface Invite {
@@ -158,6 +178,8 @@ export interface LedgerState extends LedgerCtx {
   reconciliations: Reconciliation[];
   activity: Activity[];
   shares: Share[];
+  recurring?: Recurring[];
+  receipts?: { id: Id; tx_id: Id }[]; // photos are fetched one by one from /api/receipts/:id
   user: UserPublic | null; // who is signed in (null for shared read-only views)
   shared_person_id?: Id | null; // person share links: whose point of view the page takes
   users?: UserPublic[]; // owner only

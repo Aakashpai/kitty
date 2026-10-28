@@ -183,7 +183,7 @@ export function Accounts({ id }: { id: number | null }) {
           <input list="currencies" value={home} maxLength={3} style={{ width: 96 }} onChange={(e) => setHome(e.target.value.toUpperCase())} data-testid="home-currency" />
           <datalist id="currencies">{COMMON_CURRENCIES.map((c) => <option key={c} value={c} />)}</datalist>
         </div>
-        <RatesEditor value={ratesDraft} onChange={setRatesDraft} home={home} testId="global-rates" />
+        <RatesEditor value={ratesDraft} onChange={setRatesDraft} home={home} suggest={[...state.transactions.map((t) => t.currency), ...state.accounts.map((a) => a.currency)]} testId="global-rates" />
         <div><button className="primary" onClick={() => void saveHome()} disabled={busy || !settingsDirty} data-testid="save-settings">{busy && <Spinner />}Save</button></div>
       </div>}
       {creating && <AccountForm onClose={() => setCreating(false)} />}

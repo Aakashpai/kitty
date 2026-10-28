@@ -1,7 +1,7 @@
 import { createClient, LibsqlError, type Client, type InValue } from '@libsql/client';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { formatAmount, type Account, type Activity, type Id, type Invite, type LedgerState, type Person, type Reconciliation, type Share, type Trip, type Tx, type TxInput, type UserPublic } from '../engine/index.ts';
+import { formatAmount, validateTx, type Account, type Activity, type Id, type Invite, type LedgerState, type Person, type Reconciliation, type Recurring, type Share, type Trip, type TripBudget, type Tx, type TxInput, type UserPublic } from '../engine/index.ts';
 
 // Each entry runs once, in order; schema_migrations remembers which have been applied.
 const MIGRATIONS: string[] = [
@@ -148,7 +148,52 @@ const MIGRATIONS: string[] = [
   DROP TABLE shares;
   ALTER TABLE shares_v2 RENAME TO shares;
   `,
+  `
+  ALTER TABLE transactions ADD COLUMN added_by INTEGER;
+  ALTER TABLE transactions ADD COLUMN edited_by INTEGER;
+  ALTER TABLE transactions ADD COLUMN recurring_id INTEGER;
+  ALTER TABLE transactions ADD COLUMN client_ref TEXT;
+  CREATE UNIQUE INDEX idx_tx_client_ref ON transactions(client_ref) WHERE client_ref IS NOT NULL;
+  ALTER TABLE trips ADD COLUMN budget TEXT;
+  ALTER TABLE users ADD COLUMN seen_at TEXT;
+  UPDATE users SET seen_at = datetime('now');
+  CREATE TABLE receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tx_id INTEGER NOT NULL,
+    mime TEXT NOT NULL,
+    data TEXT NOT NULL,
+    added_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX idx_receipts_tx ON receipts(tx_id);
+  CREATE TABLE recurring (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    every TEXT NOT NULL CHECK (every IN ('weekly','monthly')),
+    next_date TEXT NOT NULL,
+    template TEXT NOT NULL,
+    created_by INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
 ];
+
+const parseBudget = (v: unknown): TripBudget | null => {
+  if (typeof v !== 'string' || !v) return null;
+  try {
+    return JSON.parse(v) as TripBudget;
+  } catch {
+    return null;
+  }
+};
+
+/** Next run of a repeating entry: a week on, or the same day next month (the 31st becomes the 30th or 28th, then back). */
+export const nextDate = (date: string, every: Recurring['every'], anchor = Number(date.slice(8, 10))): string => {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  if (every === 'weekly') return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
+  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m, Math.min(anchor, last))).toISOString().slice(0, 10);
+};
 
 const parseRates = (v: unknown): Record<string, number> | null => {
   if (typeof v !== 'string' || !v) return null;
@@ -180,8 +225,10 @@ const TX_COLS = [
   'from_account_id', 'from_amount', 'to_account_id', 'to_amount', 'fee_amount', 'settled_amount', 'settled_currency',
   'linked_tx_id', 'method', 'reference', 'split_method', 'full_settlement',
 ] as const;
-const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares'] as const;
-const USER_COLS = 'id, email, name, role, person_id, created_at';
+// Receipt photos stay out of the JSON backup: a few of them would pass the 4.5 MB response limit on Vercel.
+const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring'] as const;
+const USER_COLS = 'id, email, name, role, person_id, created_at, seen_at';
+const INSERT_TX = `INSERT INTO transactions (${TX_COLS.join(', ')}, added_by, recurring_id, client_ref) VALUES (${TX_COLS.map(() => '?').join(', ')}, ?, ?, ?) RETURNING id`;
 
 const isLocal = (url: string) => url.startsWith('file:') || url === ':memory:';
 
@@ -277,11 +324,11 @@ export async function openDb(url: string, authToken?: string) {
     close: () => client.close(),
     ping: () => read((t) => t.get('SELECT 1 AS ok')),
 
-    /** One round trip for everything the client needs; the UI reloads this after every save. */
-    loadState: async (user: UserPublic | null): Promise<LedgerState> => {
+    /** One round trip for everything the client needs; the UI reloads this after every save. `materialize` first adds any repeating entries that are due. */
+    loadState: async (user: UserPublic | null, materialize = false): Promise<LedgerState> => {
       const owner = user?.role === 'owner';
       const stmts = [
-        { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips ORDER BY start_date DESC, id DESC' },
+        { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates, budget FROM trips ORDER BY start_date DESC, id DESC' },
         { sql: 'SELECT trip_id, person_id FROM trip_members ORDER BY person_id' },
         { sql: 'SELECT * FROM transactions ORDER BY date DESC, id DESC' },
         { sql: 'SELECT tx_id, person_id, amount, input FROM splits ORDER BY person_id' },
@@ -291,6 +338,8 @@ export async function openDb(url: string, authToken?: string) {
         { sql: 'SELECT * FROM reconciliations ORDER BY date DESC, id DESC' },
         { sql: 'SELECT * FROM activity ORDER BY id DESC LIMIT 300' },
         { sql: 'SELECT * FROM shares WHERE revoked = 0 ORDER BY id DESC' },
+        { sql: 'SELECT id, every, next_date, template, created_by FROM recurring WHERE active = 1 ORDER BY next_date, id' },
+        { sql: 'SELECT id, tx_id FROM receipts ORDER BY id' },
         ...(owner ? [{ sql: `SELECT ${USER_COLS} FROM users ORDER BY id` }, { sql: "SELECT * FROM invites WHERE used_at IS NULL AND expires_at > datetime('now') ORDER BY id DESC" }] : []),
       ];
       let rs;
@@ -305,6 +354,13 @@ export async function openDb(url: string, authToken?: string) {
       for (const trip of trips) {
         trip.members = members.filter((m) => m.trip_id === trip.id).map((m) => m.person_id);
         trip.rates = parseRates(trip.rates as unknown);
+        trip.budget = parseBudget(trip.budget as unknown);
+      }
+      const recurring = rows<Recurring & { template: string | TxInput }>(10).map((r) => ({ ...r, template: JSON.parse(r.template as string) as TxInput }));
+      const today = new Date().toISOString().slice(0, 10);
+      if (materialize && recurring.some((r) => r.next_date <= today)) {
+        await api.runRecurring(today);
+        return api.loadState(user);
       }
       const transactions = rows<Tx>(2);
       const byTx = new Map<Id, Tx['splits']>();
@@ -325,11 +381,13 @@ export async function openDb(url: string, authToken?: string) {
         reconciliations: rows<Reconciliation>(7),
         activity: rows<Activity>(8),
         shares: rows<Share>(9),
+        recurring,
+        receipts: rows<{ id: Id; tx_id: Id }>(11),
         user,
       };
       if (owner) {
-        state.users = rows<UserPublic>(10);
-        state.invites = rows<Invite>(11);
+        state.users = rows<UserPublic>(12);
+        state.invites = rows<Invite>(13);
       }
       return user && !owner ? memberSlice(state, user.person_id, user.id) : state;
     },
@@ -440,13 +498,13 @@ export async function openDb(url: string, authToken?: string) {
     }),
 
     createTrip: (tr: Omit<Trip, 'id'>) => inTx(async (t) => {
-      const row = (await t.get<{ id: number }>('INSERT INTO trips (name, start_date, end_date, currency, notes, archived, rates) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null]))!;
+      const row = (await t.get<{ id: number }>('INSERT INTO trips (name, start_date, end_date, currency, notes, archived, rates, budget) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, tr.budget ? JSON.stringify(tr.budget) : null]))!;
       for (const m of tr.members) await t.run('INSERT INTO trip_members (trip_id, person_id) VALUES (?, ?)', [row.id, m]);
       await logIn(t, 'create', 'trip', row.id, `Created trip ${tr.name}`);
       return { ...tr, id: row.id };
     }),
     updateTrip: (id: Id, tr: Omit<Trip, 'id'>) => inTx(async (t) => {
-      if (!(await t.run('UPDATE trips SET name = ?, start_date = ?, end_date = ?, currency = ?, notes = ?, archived = ?, rates = ? WHERE id = ?', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, id])).changes) throw new HttpError(404, 'Trip not found');
+      if (!(await t.run('UPDATE trips SET name = ?, start_date = ?, end_date = ?, currency = ?, notes = ?, archived = ?, rates = ?, budget = ? WHERE id = ?', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, tr.budget ? JSON.stringify(tr.budget) : null, id])).changes) throw new HttpError(404, 'Trip not found');
       await t.run('DELETE FROM trip_members WHERE trip_id = ?', [id]);
       for (const m of tr.members) await t.run('INSERT INTO trip_members (trip_id, person_id) VALUES (?, ?)', [id, m]);
       await logIn(t, 'update', 'trip', id, `Updated trip ${tr.name}`);
@@ -461,16 +519,26 @@ export async function openDb(url: string, authToken?: string) {
       await logIn(t, 'delete', 'trip', id, `Deleted trip ${tr.name}`, tr);
     }),
 
-    createTx: (tx: TxInput) => inTx(async (t) => {
-      const row = (await t.get<{ id: number }>(`INSERT INTO transactions (${TX_COLS.join(', ')}) VALUES (${TX_COLS.map(() => '?').join(', ')}) RETURNING id`, txParams(tx)))!;
+    /** `by` is the person recording it; `client_ref` makes a resend from the offline queue return the first copy instead of a duplicate. */
+    createTx: (tx: TxInput, by: Id | null = null, extra: { client_ref?: string | null; repeat?: Recurring['every'] | null } = {}) => inTx(async (t) => {
+      if (extra.client_ref) {
+        const dup = await t.get<{ id: number }>('SELECT id FROM transactions WHERE client_ref = ?', [extra.client_ref]);
+        if (dup) return loadTx(t, dup.id);
+      }
+      const row = (await t.get<{ id: number }>(INSERT_TX, [...txParams(tx), by, null, extra.client_ref ?? null]))!;
       await writeSplits(t, row.id, tx.splits);
+      if (extra.repeat) {
+        const { id: _id, ...template } = tx;
+        const rule = (await t.get<{ id: number }>('INSERT INTO recurring (every, next_date, template, created_by) VALUES (?, ?, ?, ?) RETURNING id', [extra.repeat, nextDate(tx.date, extra.repeat), JSON.stringify(template), by]))!;
+        await t.run('UPDATE transactions SET recurring_id = ? WHERE id = ?', [rule.id, row.id]);
+      }
       const saved = await loadTx(t, row.id);
       await logIn(t, 'create', 'transaction', row.id, `Added ${tx.type}: ${txLabel(saved)}`, saved);
       return saved;
     }),
-    updateTx: (id: Id, tx: TxInput) => inTx(async (t) => {
+    updateTx: (id: Id, tx: TxInput, by: Id | null = null) => inTx(async (t) => {
       const before = await loadTx(t, id);
-      await t.run(`UPDATE transactions SET ${TX_COLS.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`, [...txParams(tx), id]);
+      await t.run(`UPDATE transactions SET ${TX_COLS.map((c) => `${c} = ?`).join(', ')}, edited_by = ?, updated_at = datetime('now') WHERE id = ?`, [...txParams(tx), by, id]);
       await writeSplits(t, id, tx.splits);
       const saved = await loadTx(t, id);
       await logIn(t, 'update', 'transaction', id, `Edited ${tx.type}: ${txLabel(saved)}`, { before, after: saved });
@@ -480,10 +548,60 @@ export async function openDb(url: string, authToken?: string) {
       const tx = await loadTx(t, id);
       if (await t.get('SELECT 1 FROM transactions WHERE linked_tx_id = ? LIMIT 1', [id])) throw new HttpError(409, 'This expense has refunds linked to it. Delete or unlink the refunds first.');
       await t.run('DELETE FROM splits WHERE tx_id = ?', [id]);
+      await t.run('DELETE FROM receipts WHERE tx_id = ?', [id]);
       await t.run('DELETE FROM transactions WHERE id = ?', [id]);
       await logIn(t, 'delete', 'transaction', id, `Deleted ${tx.type}: ${txLabel(tx)}`, tx);
     }),
     getTx: (id: Id) => read((t) => loadTx(t, id)),
+
+    /**
+     * Adds every due copy of each repeating entry (catching up if nobody opened the app for a while) and moves its next date
+     * on. A rule whose person, trip or account no longer checks out is switched off rather than writing a broken entry.
+     */
+    runRecurring: async (today: string) => {
+      const ctx = await api.loadState(null);
+      for (const r of ctx.recurring ?? []) {
+        if (r.next_date > today) continue;
+        if (validateTx(r.template, ctx).length) {
+          await read((t) => t.run('UPDATE recurring SET active = 0 WHERE id = ?', [r.id]));
+          continue;
+        }
+        await inTx(async (t) => {
+          // Re-read inside the write lock: a request racing this one may already have done it.
+          const cur = await t.get<{ next_date: string }>('SELECT next_date FROM recurring WHERE id = ? AND active = 1', [r.id]);
+          if (!cur || cur.next_date > today) return;
+          const anchor = Number(r.template.date.slice(8, 10));
+          let next = cur.next_date;
+          for (let n = 0; next <= today && n < 120; n++) {
+            const copy = { ...r.template, date: next };
+            const row = (await t.get<{ id: number }>(INSERT_TX, [...txParams(copy), r.created_by, r.id, null]))!;
+            await writeSplits(t, row.id, copy.splits);
+            await logIn(t, 'create', 'transaction', row.id, `Repeated ${copy.type}: ${copy.description || copy.type} (${formatAmount(copy.amount, copy.currency)})`);
+            next = nextDate(next, r.every, anchor);
+          }
+          await t.run('UPDATE recurring SET next_date = ? WHERE id = ?', [next, r.id]);
+        });
+      }
+    },
+    stopRecurring: (id: Id) => inTx(async (t) => {
+      if (!(await t.run('UPDATE recurring SET active = 0 WHERE id = ? AND active = 1', [id])).changes) throw new HttpError(404, 'Repeating entry not found');
+      await logIn(t, 'update', 'recurring', id, 'Stopped a repeating entry');
+    }),
+
+    addReceipt: (txId: Id, mime: string, data: string, by: Id | null) => inTx(async (t) => {
+      if (!(await t.get('SELECT 1 FROM transactions WHERE id = ?', [txId]))) throw new HttpError(404, 'Transaction not found');
+      const row = (await t.get<{ id: number }>('INSERT INTO receipts (tx_id, mime, data, added_by) VALUES (?, ?, ?, ?) RETURNING id', [txId, mime, data, by]))!;
+      await logIn(t, 'update', 'transaction', txId, 'Added a receipt photo');
+      return { id: row.id, tx_id: txId };
+    }),
+    getReceipt: (id: Id) => read((t) => t.get<{ tx_id: Id; mime: string; data: string }>('SELECT tx_id, mime, data FROM receipts WHERE id = ?', [id])),
+    deleteReceipt: (id: Id) => inTx(async (t) => {
+      const r = await t.get<{ tx_id: Id }>('SELECT tx_id FROM receipts WHERE id = ?', [id]);
+      if (!r) throw new HttpError(404, 'Receipt not found');
+      await t.run('DELETE FROM receipts WHERE id = ?', [id]);
+      await logIn(t, 'update', 'transaction', r.tx_id, 'Removed a receipt photo');
+    }),
+    markSeen: (userId: Id) => read((t) => t.run("UPDATE users SET seen_at = datetime('now') WHERE id = ?", [userId])),
 
     createReconciliation: (r: Omit<Reconciliation, 'id' | 'created_at'>) => inTx(async (t) => {
       const row = (await t.get<{ id: number }>('INSERT INTO reconciliations (account_id, date, counted_amount, expected_amount, note) VALUES (?, ?, ?, ?, ?) RETURNING id', [r.account_id, r.date, r.counted_amount, r.expected_amount, r.note]))!;
@@ -508,7 +626,7 @@ export async function openDb(url: string, authToken?: string) {
         if (!inv) throw new HttpError(410, 'This invite has expired or was already used');
         await t.run("UPDATE invites SET used_at = datetime('now') WHERE id = ?", [inviteId]);
       }
-      const row = (await t.get<{ id: number }>('INSERT INTO users (email, name, password_hash, role, person_id) VALUES (?, ?, ?, ?, ?) RETURNING id', [u.email, u.name, u.password_hash, u.role, u.person_id]))!;
+      const row = (await t.get<{ id: number }>("INSERT INTO users (email, name, password_hash, role, person_id, seen_at) VALUES (?, ?, ?, ?, ?, datetime('now')) RETURNING id", [u.email, u.name, u.password_hash, u.role, u.person_id]))!;
       if (u.person_id != null) await t.run('UPDATE people SET name = ? WHERE id = ? AND is_me = 1', [u.name, u.person_id]);
       await logIn(t, 'create', 'user', row.id, `${u.name} (${u.email}) can now sign in`);
       return (await t.get<UserPublic>(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [row.id]))!;
@@ -570,6 +688,7 @@ export async function openDb(url: string, authToken?: string) {
         }
       }
       if (!(await t.get('SELECT 1 FROM people WHERE is_me = 1'))) throw new HttpError(400, 'Backup has no "me" person');
+      await t.run('DELETE FROM receipts WHERE tx_id NOT IN (SELECT id FROM transactions)');
       await logIn(t, 'restore', 'ledger', null, `Restored backup from ${String(data.exported_at ?? 'unknown date')}`);
     }),
     snapshot: async (path: string) => {
@@ -601,7 +720,7 @@ function memberSlice(s: LedgerState, pid: Id | null, uid: Id): LedgerState {
   const tripIds = new Set(trips.map((t) => t.id));
   const transactions = s.transactions.filter((t) => (t.trip_id != null && tripIds.has(t.trip_id)) || involves(t, pid));
   const txIds = new Set(transactions.map((t) => t.id));
-  const seen = new Set<Id | null>([pid, ...trips.flatMap((t) => t.members), ...transactions.flatMap((t) => [t.payer_id, t.payee_id, ...t.splits.map((x) => x.person_id)])]);
+  const seen = new Set<Id | null>([pid, ...trips.flatMap((t) => t.members), ...transactions.flatMap((t) => [t.payer_id, t.payee_id, t.added_by ?? null, t.edited_by ?? null, ...t.splits.map((x) => x.person_id)])]);
   const used = new Set(transactions.flatMap((t) => [t.from_account_id, t.to_account_id]));
   const accounts = s.accounts.filter((a) => a.person_id === pid || used.has(a.id)).map((a) => (a.person_id === pid ? a : { ...a, opening_balance: 0 }));
   const own = new Set(accounts.filter((a) => a.person_id === pid).map((a) => a.id));
@@ -614,5 +733,7 @@ function memberSlice(s: LedgerState, pid: Id | null, uid: Id): LedgerState {
     reconciliations: s.reconciliations.filter((r) => own.has(r.account_id)),
     activity: s.activity.filter((a) => a.entity === 'transaction' && a.entity_id != null && txIds.has(a.entity_id)),
     shares: s.shares.filter((x) => x.created_by === uid),
+    recurring: s.recurring?.filter((r) => (r.template.trip_id != null && tripIds.has(r.template.trip_id)) || involves(r.template, pid)),
+    receipts: s.receipts?.filter((r) => txIds.has(r.tx_id)),
   };
 }

@@ -3,10 +3,12 @@ import {
   allocate, computeBalances, decimalsOf, emptyTx, formatAmount, pairwiseDebts, parseAmount, refundedTotal, toMajor, validateTx,
   TX_TYPES, type Account, type Id, type Split, type SplitMethod, type Tx, type TxInput, type TxType,
 } from '../../engine/index.ts';
-import { api, errorText } from '../api.ts';
+import { ApiError, api, enqueue, errorText } from '../api.ts';
 import { CATEGORIES, COMMON_CURRENCIES, categoryOf, guessCategory, today, useLedger } from '../store.tsx';
 import { X } from 'lucide-react';
 import { CategoryGlyph, ErrorBox, Field, Money, TYPE_LABEL, TypeIcon } from './ui.tsx';
+import { useTxForm } from './txFormContext.ts';
+import { againPrefill } from './TxDetail.tsx';
 import { EffectsView } from './effectsView.tsx';
 
 const TYPE_HELP: Record<TxType, string> = {
@@ -32,6 +34,8 @@ interface Props {
 export function TxForm({ initial, existing, onClose, onSaved }: Props) {
   const ledger = useLedger();
   const { state, me, people, accounts, trips, who, reload } = ledger;
+  const openForm = useTxForm();
+  const [repeatEvery, setRepeatEvery] = useState<'' | 'weekly' | 'monthly'>('');
 
   const [tx, setTx] = useState<TxInput>(() => {
     if (existing) return { ...existing };
@@ -175,11 +179,18 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
   const save = async () => {
     setSaving(true);
     setServerError(null);
+    const body = existing ? built.tx : { ...built.tx, repeat: repeatEvery || null };
     try {
-      const saved = existing ? await api<Tx>('PUT', `/api/transactions/${existing.id}`, built.tx) : await api<Tx>('POST', '/api/transactions', built.tx);
+      const saved = existing ? await api<Tx>('PUT', `/api/transactions/${existing.id}`, body) : await api<Tx>('POST', '/api/transactions', body);
       await reload();
       onSaved(saved);
     } catch (e) {
+      // No connection: a new entry waits on this device and syncs later; edits still need the server.
+      if (!existing && e instanceof ApiError && e.status === 0) {
+        enqueue(body);
+        onClose();
+        return;
+      }
       setServerError(errorText(e));
     } finally {
       setSaving(false);
@@ -217,6 +228,20 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
       </select>
     </Field>
   );
+  // Same type, amount, currency and day as another entry: probably entered twice.
+  const dupe = built.tx.amount > 0 ? state.transactions.find((t) => t.id !== existing?.id && t.type === built.tx.type && t.amount === built.tx.amount && t.currency === built.tx.currency && t.date === built.tx.date) : undefined;
+  // One tap to log something you record often (a Grab ride, coffee) again: the latest few distinct ones of this type.
+  const recent: Tx[] = [];
+  if (!existing && !initial?.description && !tx.description && !texts.amount && tx.type !== 'refund') {
+    const seen = new Set<string>();
+    for (const t of state.transactions) {
+      const key = t.description.trim().toLowerCase();
+      if (t.type !== tx.type || !key || seen.has(key)) continue;
+      seen.add(key);
+      recent.push(t);
+      if (recent.length === 4) break;
+    }
+  }
   const linkedOrig = tx.linked_tx_id != null ? state.transactions.find((t) => t.id === tx.linked_tx_id) : undefined;
   const refundable = state.transactions.filter((t) => t.type === 'expense' && (tx.trip_id == null || t.trip_id === tx.trip_id || t.id === tx.linked_tx_id));
 
@@ -235,6 +260,16 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
                   <TypeIcon type={t} small />
                   <span className="t">{TYPE_LABEL[t]}</span>
                   <span className="d">{TYPE_HELP[t]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {recent.length > 0 && (
+            <div className="chips" data-testid="recent">
+              <span className="faint small">Again:</span>
+              {recent.map((t) => (
+                <button type="button" key={t.id} className="chip" onClick={() => openForm({ initial: againPrefill(t) })} title={`${t.description} · ${formatAmount(t.amount, t.currency)}`} data-testid={`again-${t.id}`}>
+                  <CategoryGlyph category={t.type === 'expense' ? t.category : 'Expenses'} />{t.description}
                 </button>
               ))}
             </div>
@@ -461,10 +496,22 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
                   <input value={tx.reference ?? ''} onChange={(e) => patch({ reference: e.target.value || null })} />
                 </Field>
               )}
+              {!existing && tx.type !== 'refund' && (
+                <Field label="Repeat" hint={repeatEvery ? 'A copy is added on each date automatically; stop it any time' : undefined}>
+                  <select value={repeatEvery} onChange={(e) => setRepeatEvery(e.target.value as typeof repeatEvery)} data-testid="repeat">
+                    <option value="">Doesn’t repeat</option>
+                    <option value="weekly">Every week</option>
+                    <option value="monthly">Every month, same day</option>
+                  </select>
+                </Field>
+              )}
             </div>
           </details>
 
           {canPreview && errors.length === 0 && <EffectsView tx={built.tx} />}
+          {dupe && (
+            <div className="warn-box" data-testid="dupe-warning">Same amount on the same day as “{dupe.description || TYPE_LABEL[dupe.type]}”. Save only if it’s a separate charge.</div>
+          )}
           {errors.length > 0 && texts.amount !== '' && (
             <div className="warn-box" data-testid="form-errors">
               <ul>{errors.map((e) => <li key={e}>{e}</li>)}</ul>

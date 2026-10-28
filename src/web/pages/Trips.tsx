@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { Banknote, ChevronLeft, Copy, Link2, Pencil, Plus, Trash2 } from 'lucide-react';
-import { computeBalances, formatAmount, homeSpendingBy, shareOf, spendingBy, type Id, type Person, type Share, type Trip, type Tx } from '../../engine/index.ts';
+import { computeBalances, formatAmount, homeSpendingBy, parseAmount, shareOf, spendingBy, toMajor, type Id, type Person, type Share, type Trip, type TripBudget, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
+import { CATEGORIES, COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
-import { Avatar, DangerButton, TripMark, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
+import { Avatar, BudgetBar, CategoryGlyph, DangerButton, TripMark, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
 
@@ -21,10 +21,27 @@ function TripForm({ existing, onClose }: { existing?: Trip; onClose: () => void 
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const toggle = (id: Id) => setT((x) => ({ ...x, members: x.members.includes(id) ? x.members.filter((m) => m !== id) : [...x.members, id] }));
+  const home = state.settings.home_currency;
+  // Budget inputs by key: '' is the whole trip, otherwise a category. Amounts are in the home currency.
+  const [budgetText, setBudgetText] = useState<Record<string, string>>(() => {
+    const b = existing?.budget;
+    const out: Record<string, string> = b?.total != null ? { '': toMajor(b.total, home) } : {};
+    for (const [k, v] of Object.entries(b?.categories ?? {})) out[k] = toMajor(v, home);
+    return out;
+  });
   const save = async () => {
+    const budget: TripBudget = { total: null, categories: {} };
+    for (const [k, text] of Object.entries(budgetText)) {
+      if (!text.trim()) continue;
+      const v = parseAmount(text, home);
+      if (v == null || v <= 0) return setErr(`${k || 'Whole trip'} budget: enter an amount in ${home}`);
+      if (k) budget.categories[k] = v;
+      else budget.total = v;
+    }
+    const body = { ...t, budget: budget.total != null || Object.keys(budget.categories).length ? budget : null };
     setSaving(true);
     try {
-      const saved = existing ? (await api('PUT', `/api/trips/${existing.id}`, t), existing) : await api<Trip>('POST', '/api/trips', t);
+      const saved = existing ? (await api('PUT', `/api/trips/${existing.id}`, body), existing) : await api<Trip>('POST', '/api/trips', body);
       await reload();
       onClose();
       if (!existing) navigate(`/trips/${saved.id}`);
@@ -60,7 +77,21 @@ function TripForm({ existing, onClose }: { existing?: Trip; onClose: () => void 
           <summary>Exchange rates for this trip (optional)</summary>
           <div className="stack tight" style={{ marginTop: 8 }}>
             <span className="hint">Overrides the default rates from Accounts & Cash for this trip only. Card charges recorded in {state.settings.home_currency} are always used as-is.</span>
-            <RatesEditor value={t.rates} onChange={(r) => setT({ ...t, rates: r })} home={state.settings.home_currency} testId="trip-rates" />
+            <RatesEditor value={t.rates} onChange={(r) => setT({ ...t, rates: r })} home={state.settings.home_currency} suggest={[t.currency, ...state.transactions.filter((x) => existing && x.trip_id === existing.id).map((x) => x.currency)]} testId="trip-rates" />
+          </div>
+        </details>
+        <details open={!!existing?.budget}>
+          <summary>Budget (optional)</summary>
+          <div className="stack tight" style={{ marginTop: 8 }}>
+            <span className="hint">What the whole group plans to spend, in {home}: for the trip, per category, or both. Card charges count at their real {home} amount, cash at the trip’s rates.</span>
+            <div className="form-grid">
+              {['', ...CATEGORIES].map((k) => (
+                <label key={k} className={`field ${k ? '' : 'span-2'}`}>
+                  <span className="field-label">{k ? <span className="who"><CategoryGlyph category={k} />{k}</span> : `Whole trip (${home})`}</span>
+                  <input inputMode="decimal" value={budgetText[k] ?? ''} placeholder="No budget" onChange={(e) => setBudgetText({ ...budgetText, [k]: e.target.value })} data-testid={`budget-${k || 'total'}`} />
+                </label>
+              ))}
+            </div>
           </div>
         </details>
         {existing && <label className="check"><input type="checkbox" checked={!!t.archived} onChange={(e) => setT({ ...t, archived: e.target.checked ? 1 : 0 })} /><span>Archived (hidden from pickers)</span></label>}
@@ -177,6 +208,7 @@ export function TripView({ trip }: { trip: Trip }) {
   const myShare = new Map<string, number>();
   for (const tx of txs) addTo(myShare, tx.currency, shareOf(tx, me.id));
   const myShareHome = homeSpendingBy(txs, rateCtx, () => '', me.id).get('') ?? new Map<string, number>();
+  const spentHome = homeSpendingBy(txs, rateCtx, () => '').get('')?.get(rateCtx.home) ?? 0;
   const fees = new Map<string, number>();
   for (const tx of txs) if (tx.fee_amount) addTo(fees, tx.currency, tx.fee_amount);
   const b = computeBalances(txs);
@@ -201,6 +233,7 @@ export function TripView({ trip }: { trip: Trip }) {
         {!readOnly && <Stat label="Your share" foot={foreign && myShareHome.size ? <>≈ <MoneyList map={myShareHome} /> spent by you</> : undefined}><MoneyList map={myShare} empty="Nothing yet" /></Stat>}
         {!readOnly && <Stat label="Your position" foot={foreign && myHome ? `≈ ${formatAmount(myHome, rateCtx.home)}${hb.unconverted.size ? ' + unconverted' : ''}` : undefined}><MoneyList map={b.net.get(me.id) ?? new Map()} sign empty="Settled" /></Stat>}
         {readOnly && <Stat label="Transactions">{txs.length}</Stat>}
+        {trip.budget?.total != null && <Stat label="Budget" foot={<BudgetBar spent={spentHome} limit={trip.budget.total} currency={rateCtx.home} />}>{formatAmount(spentHome, rateCtx.home)}</Stat>}
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
@@ -209,7 +242,7 @@ export function TripView({ trip }: { trip: Trip }) {
       {tab === 'transactions' && <div className="panel"><TxList txs={txs} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
       {tab === 'categories' && (
         <div className="stack">
-          <CategorySpend txs={txs} person={readOnly ? undefined : me.id} selected={cat?.label ?? null} onSelect={setCat} />
+          <CategorySpend txs={txs} person={readOnly ? undefined : me.id} budget={trip.budget} selected={cat?.label ?? null} onSelect={setCat} />
           {cat && <div className="panel"><TxList txs={txs.filter(cat.match)} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
         </div>
       )}

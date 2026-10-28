@@ -84,7 +84,7 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
       </section>
       <section>
         <h2>{focus != null ? `${own} share of spending` : `Spent${trip ? ` on ${trip.name}` : ''}`}</h2>
-        <CategorySpend txs={txs} person={readOnly && focus == null ? undefined : subject} label={isYou ? 'You' : who(subject)} everyone={focus == null} compact selected={cat?.label ?? null} onSelect={setCat} />
+        <CategorySpend txs={txs} budget={focus == null ? trip?.budget : null} person={readOnly && focus == null ? undefined : subject} label={isYou ? 'You' : who(subject)} everyone={focus == null} compact selected={cat?.label ?? null} onSelect={setCat} />
       </section>
       <section>
         <div className="row between"><h2>{cat ? cat.label : showAll ? 'All entries' : 'Latest'}</h2>{listed.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${listed.length}`}</button>}</div>

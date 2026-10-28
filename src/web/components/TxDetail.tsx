@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { Pencil, Trash2, Undo2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Camera, CopyPlus, Pencil, Repeat, Trash2, Undo2, X } from 'lucide-react';
 import { formatAmount, refundedTotal, toMajor, type Tx, type TxInput } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { useLedger } from '../store.tsx';
+import { today, useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, ErrorBox, Modal, Money, Spinner, TypeBadge, TypeIcon, fmtDate, fmtWhen, useBusy } from './ui.tsx';
 import { EffectsView } from './effectsView.tsx';
@@ -25,6 +25,24 @@ export function refundPrefill(tx: Tx, all: Tx[]): Partial<TxInput> {
   };
 }
 
+/** Prefill for recording the same thing again today. Real account charges stay blank: they differ every time. */
+export function againPrefill(tx: Tx): Partial<TxInput> {
+  const { id: _id, created_at: _c, updated_at: _u, added_by: _a, edited_by: _e, recurring_id: _r, ...rest } = tx;
+  return { ...rest, date: today(), from_amount: null, to_amount: null, settled_amount: null, full_settlement: 0 };
+}
+
+/** Phone photos are several MB; a 1600px JPEG keeps a receipt readable at a few hundred KB. */
+async function shrink(file: File): Promise<string> {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+  img.close();
+  return canvas.toDataURL('image/jpeg', 0.75);
+}
+
 export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
   const l = useLedger();
   const openForm = useTxForm();
@@ -35,8 +53,21 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
   const refunds = state.transactions.filter((t) => t.linked_tx_id === tx.id);
   const original = tx.linked_tx_id != null ? state.transactions.find((t) => t.id === tx.linked_tx_id) : null;
   const history = state.activity.filter((a) => a.entity === 'transaction' && a.entity_id === tx.id);
+  const receipts = (state.receipts ?? []).filter((r) => r.tx_id === tx.id);
+  const rule = tx.recurring_id != null ? state.recurring?.find((r) => r.id === tx.recurring_id) : undefined;
+  const fileRef = useRef<HTMLInputElement>(null);
   const [busy, run] = useBusy();
   const [err, setErr] = useState<string | null>(null);
+  const act = (fn: () => Promise<unknown>) => run(async () => {
+    try {
+      await fn();
+      await l.reload();
+      setErr(null);
+    } catch (e) {
+      setErr(errorText(e));
+    }
+  });
+  const attach = (file: File) => act(async () => api('POST', `/api/transactions/${tx.id}/receipts`, { data: await shrink(file) }));
   const remove = () => {
     if (busy || !window.confirm(`Delete this ${tx.type}? Balances will be recalculated without it. A snapshot stays in the activity history.`)) return;
     void run(async () => {
@@ -54,6 +85,9 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
     ['Who', txWho(tx, l)],
   ];
   if (tx.category) rows.push(['Category', tx.category]);
+  if (tx.added_by != null) rows.push(['Added', `${who(tx.added_by)} · ${fmtWhen(tx.created_at)}`]);
+  if (tx.edited_by != null) rows.push(['Edited', `${who(tx.edited_by)} · ${fmtWhen(tx.updated_at)}`]);
+  if (tx.recurring_id != null) rows.push(['Repeats', rule ? `${rule.every === 'weekly' ? 'Every week' : 'Every month'} · next ${fmtDate(rule.next_date)}` : 'Stopped']);
   rows.push(['Trip', trip ? trip.name : 'None (personal)']);
   if (from) rows.push([tx.type === 'repayment' ? `${who(tx.payer_id)} paid from` : 'From account', `${from.name} · ${formatAmount(tx.from_amount ?? tx.amount, from.currency)}`]);
   if (to) rows.push([tx.type === 'repayment' ? `${who(tx.payee_id)} received into` : tx.type === 'withdrawal' ? 'Cash holding' : 'To account', `${to.name} · ${formatAmount(tx.to_amount ?? tx.amount, to.currency)}`]);
@@ -107,6 +141,25 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
             <div className="muted small">Net after refunds: {formatAmount(tx.amount - refundedTotal(state.transactions, tx.id), tx.currency)}</div>
           </div>
         )}
+        {!readOnly && (
+          <div className="stack tight" data-testid="receipts">
+            <div className="row between">
+              <strong className="small">Receipts</strong>
+              <button className="small" disabled={busy} onClick={() => fileRef.current?.click()} data-testid="add-receipt">{busy ? <Spinner /> : <Camera />}Add photo</button>
+              <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void attach(f); }} data-testid="receipt-file" />
+            </div>
+            {receipts.length > 0 && (
+              <div className="receipts">
+                {receipts.map((r) => (
+                  <span key={r.id} className="receipt">
+                    <a href={`/api/receipts/${r.id}`} target="_blank" rel="noreferrer"><img src={`/api/receipts/${r.id}`} alt="Receipt" loading="lazy" /></a>
+                    <button className="ghost icon small" aria-label="Remove photo" disabled={busy} onClick={() => { if (window.confirm('Remove this photo?')) void act(() => api('DELETE', `/api/receipts/${r.id}`)); }}><X /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {!readOnly && history.length > 0 && (
           <details>
             <summary>History ({history.length})</summary>
@@ -118,6 +171,8 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
         {!readOnly && <div className="row between">
           <div className="row">
             <button onClick={() => openForm({ existing: tx, onSaved: onClose })} data-testid="edit-tx"><Pencil />Edit</button>
+            {tx.type !== 'refund' && <button onClick={() => openForm({ initial: againPrefill(tx) })} data-testid="again-tx"><CopyPlus />Add again</button>}
+            {rule && <button disabled={busy} onClick={() => { if (window.confirm('Stop repeating? Entries already added stay.')) void act(() => api('DELETE', `/api/recurring/${rule.id}`)); }} data-testid="stop-repeat"><Repeat />Stop repeating</button>}
             {tx.type === 'expense' && tx.amount > refundedTotal(state.transactions, tx.id) && (
               <button onClick={() => openForm({ initial: refundPrefill(tx, state.transactions), onSaved: onClose })} data-testid="refund-tx"><Undo2 />Record refund</button>
             )}

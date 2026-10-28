@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import type { TxInput, Tx } from '../engine/index.ts';
+import { dropQueued, flushQueue, queued } from './api.ts';
 import { LedgerProvider, useLedger } from './store.tsx';
 import { useRoute } from './router.tsx';
 import { TxForm } from './components/TxForm.tsx';
@@ -17,7 +18,7 @@ import { Reports } from './pages/Reports.tsx';
 import { InviteAccept } from './pages/Auth.tsx';
 import { SharedPage } from './pages/Shared.tsx';
 import { SimpleView } from './pages/Simple.tsx';
-import { TxFormCtx, type OpenTxForm } from './components/txFormContext.ts';
+import { TxFormCtx, useTxForm, type OpenTxForm } from './components/txFormContext.ts';
 import { APP_NAME, Avatar, Logo, TripMark, hueStyle } from './components/ui.tsx';
 import { AccountModal } from './components/AccountModal.tsx';
 
@@ -65,13 +66,14 @@ function Shell() {
   const { state, user, logout, owner } = useLedger();
   const [theme, toggleTheme] = useTheme();
   const [form, setForm] = useState<{ initial?: Partial<TxInput>; existing?: Tx; onSaved?: (tx: Tx) => void } | null>(null);
+  const [formKey, setFormKey] = useState(0); // a fresh form each time, even when one form opens another ("Again" chips)
   const [account, setAccount] = useState(false);
   const [simple, toggleSimple] = useSimple();
   const [scope, setScope] = useState('');
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [path]);
   useEffect(() => { document.body.style.overflow = menu ? 'hidden' : ''; return () => { document.body.style.overflow = ''; }; }, [menu]);
-  const open: OpenTxForm = (opts = {}) => setForm(opts);
+  const open: OpenTxForm = (opts = {}) => { setForm(opts); setFormKey((k) => k + 1); };
 
   // "N" opens the form from anywhere, unless the user is typing or a dialog is already up.
   useEffect(() => {
@@ -111,7 +113,7 @@ function Shell() {
               {user && <button className="ghost icon small" onClick={() => void logout()} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>}
             </span>
           </header>
-          <main className="main simple-main"><SimpleView scope={scope} onScope={setScope} /></main>
+          <main className="main simple-main"><QueueBanner /><SimpleView scope={scope} onScope={setScope} /></main>
           <button className="primary fab" onClick={() => open()} aria-label="Add transaction"><Plus />Add</button>
         </div>
       ) : (
@@ -151,13 +153,14 @@ function Shell() {
           </div>
           </div>
         </aside>
-        <main className="main">{page}</main>
+        <main className="main"><QueueBanner />{page}</main>
         <button className="primary fab" onClick={() => open()} aria-label="Add transaction"><Plus />Add</button>
       </div>
       )}
       {account && <AccountModal onClose={() => setAccount(false)} />}
       {form && (
         <TxForm
+          key={formKey}
           initial={form.initial}
           existing={form.existing}
           onClose={() => setForm(null)}
@@ -168,6 +171,44 @@ function Shell() {
         />
       )}
     </TxFormCtx.Provider>
+  );
+}
+
+/** New entries saved without a connection and still on this device; ones the ledger rejected can be fixed or dropped. */
+function QueueBanner() {
+  const { reload } = useLedger();
+  const openForm = useTxForm();
+  const [list, setList] = useState(queued);
+  const [syncing, setSyncing] = useState(false);
+  useEffect(() => {
+    const on = () => setList(queued());
+    window.addEventListener('ledger:queue', on);
+    return () => window.removeEventListener('ledger:queue', on);
+  }, []);
+  const waiting = list.filter((q) => !q.error).length;
+  if (!list.length) return null;
+  const sync = async () => {
+    setSyncing(true);
+    try { if (await flushQueue()) await reload(); } finally { setSyncing(false); }
+  };
+  return (
+    <div className="info-box stack tight" role="status" data-testid="queue-banner">
+      {waiting > 0 && (
+        <div className="row between">
+          <span>{waiting} new entr{waiting === 1 ? 'y is' : 'ies are'} saved on this device and will sync when the ledger is reachable.</span>
+          <button className="small" disabled={syncing} onClick={() => void sync()}>{syncing ? 'Syncing…' : 'Sync now'}</button>
+        </div>
+      )}
+      {list.filter((q) => q.error).map((q) => (
+        <div key={q.ref} className="row between">
+          <span>“{String(q.body.description || 'An entry')}” was not accepted: {q.error}</span>
+          <span className="row">
+            <button className="small" onClick={() => openForm({ initial: q.body as Partial<TxInput>, onSaved: () => dropQueued(q.ref) })}>Fix</button>
+            <button className="small ghost" onClick={() => { if (window.confirm('Discard this entry?')) dropQueued(q.ref); }}>Discard</button>
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

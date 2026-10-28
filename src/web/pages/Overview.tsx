@@ -31,7 +31,7 @@ function Bars({ data, currency }: { data: { key: string; label: string; value: n
 
 export function Overview() {
   const l = useLedger();
-  const { state, me, balances, reload, who, rateCtx, owner, ownAccounts } = l;
+  const { state, me, user, balances, reload, who, rateCtx, owner, ownAccounts } = l;
   const openForm = useTxForm();
   const [selected, setSelected] = useState<number | null>(null);
   const [cur, setCur] = useState<string | null>(null);
@@ -78,6 +78,21 @@ export function Overview() {
   const currencies = [...byCur.keys()].sort();
   const chartCur = cur && byCur.has(cur) ? cur : currencies.includes(state.settings.home_currency) ? state.settings.home_currency : currencies[0];
 
+  // Entries someone else added or changed since this user last pressed "Got it" (never pressed: the latest few).
+  const seenAt = user?.seen_at ?? '';
+  const fresh = user ? state.transactions.filter((t) => (t.added_by != null && t.added_by !== me.id && t.created_at > seenAt) || (t.edited_by != null && t.edited_by !== me.id && t.updated_at > seenAt)).slice(0, 8) : [];
+  const markSeen = async () => {
+    setBusy(true);
+    try {
+      await api('POST', '/api/seen');
+      await reload();
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const loadSample = async () => {
     setBusy(true);
     try {
@@ -112,6 +127,12 @@ export function Overview() {
         <div><h1>Overview</h1><div className="sub">{state.transactions.length} transactions · {activeTrips.length} active trip{activeTrips.length === 1 ? '' : 's'}</div></div>
         <button className="primary" onClick={() => openForm()}><Plus />Add transaction</button>
       </div>
+      {fresh.length > 0 && (
+        <div className="panel" data-testid="fresh-panel">
+          <div className="panel-head"><h3>New from others</h3><button className="small" disabled={busy} onClick={() => void markSeen()} data-testid="mark-seen">Got it</button></div>
+          <TxList txs={fresh} onSelect={(tx) => setSelected(tx.id)} />
+        </div>
+      )}
       <div className="grid-4">
         <Stat label="You are owed" icon={ArrowDownLeft} foot={homeFoot(owedHome)}><MoneyList map={owed} empty="Nothing" /></Stat>
         <Stat label="You owe" icon={ArrowUpRight} foot={homeFoot(oweHome)}><MoneyList map={owe} empty="Nothing" /></Stat>

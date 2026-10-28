@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type RateCtx, type Trip, type Tx, type UserPublic } from '../engine/index.ts';
-import { api, errorText } from './api.ts';
+import { ApiError, api, errorText, flushQueue, queued } from './api.ts';
 import { Login, Setup } from './pages/Auth.tsx';
 
 export interface Ledger {
@@ -23,6 +23,11 @@ export interface Ledger {
 
 const Ctx = createContext<Ledger | null>(null);
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'down';
+
+// The last ledger this device loaded, so the app still opens (read-only, plus queued new entries) without a connection.
+const CACHE = 'kitty-state';
+const cacheState = (s: LedgerState) => { try { localStorage.setItem(CACHE, JSON.stringify(s)); } catch { /* full or private */ } };
+const cachedState = (): LedgerState | null => { try { return JSON.parse(localStorage.getItem(CACHE) ?? 'null') as LedgerState | null; } catch { return null; } };
 
 /** Thin bar at the very top while any request is in flight; appears only after 150ms so quick calls don't flicker. */
 function Progress() {
@@ -78,8 +83,11 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
   const reload = useCallback(async () => {
     if (initialState) return;
     try {
-      setState(await api<LedgerState>('GET', '/api/state'));
+      const s = await api<LedgerState>('GET', '/api/state');
+      setState(s);
+      cacheState(s);
       setOffline(false);
+      if (queued().some((q) => !q.error) && (await flushQueue())) setState(await api<LedgerState>('GET', '/api/state'));
     } catch (e) {
       // 401 and network errors are handled by the events below; anything else is shown on the Down screen.
       if (!(e instanceof Error && /Lost contact|Sign in/.test(e.message))) setDownMessage(errorText(e));
@@ -94,11 +102,21 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
       if (status.needsSetup) setPhase('setup');
       else if (!status.user) setPhase('login');
       else {
-        setState(await api<LedgerState>('GET', '/api/state'));
+        const s = await api<LedgerState>('GET', '/api/state');
+        setState(s);
+        cacheState(s);
         setPhase('ready');
         setOffline(false);
+        if (queued().some((q) => !q.error) && (await flushQueue())) setState(await api<LedgerState>('GET', '/api/state'));
       }
     } catch (e) {
+      const cached = e instanceof ApiError && e.status === 0 ? cachedState() : null;
+      if (cached) {
+        setState(cached);
+        setPhase('ready');
+        setOffline(true);
+        return;
+      }
       setDownMessage(errorText(e));
       setPhase((p) => (p === 'ready' ? p : 'down'));
     } finally {
@@ -157,6 +175,9 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
       who: (id) => (id == null ? '—' : id === me.id && !readOnly ? 'You' : (people.get(id)?.name ?? `#${id}`)),
       accountName: (id) => (id == null ? '—' : (accounts.get(id)?.name ?? `#${id}`)),
       logout: async () => {
+        const waiting = queued().length;
+        if (waiting && !window.confirm(`${waiting} new entr${waiting === 1 ? 'y has' : 'ies have'} not synced from this device yet. Sign out and discard ${waiting === 1 ? 'it' : 'them'}?`)) return;
+        try { localStorage.removeItem(CACHE); localStorage.removeItem('kitty-queue'); } catch { /* private mode */ }
         await api('POST', '/api/auth/logout').catch(() => undefined);
         setState(null);
         setPhase('login');
@@ -184,7 +205,7 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
       {offline && (
         <div className="banner" role="status" data-testid="offline-banner">
           <span className="pulse small" aria-hidden />
-          Lost contact with the ledger. Changes won’t save until it’s back — {countdown > 0 ? `retrying in ${countdown}s` : 'retrying now'}.
+          Offline. New entries are kept on this device and sync when the ledger is back; edits need a connection — {countdown > 0 ? `retrying in ${countdown}s` : 'retrying now'}.
         </div>
       )}
       {children}
