@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Banknote, ChevronLeft, Copy, Link2, Pencil, Plus, Trash2 } from 'lucide-react';
-import { computeBalances, formatAmount, shareOf, spendingBy, type Id, type Person, type Share, type Trip, type Tx } from '../../engine/index.ts';
+import { computeBalances, formatAmount, homeSpendingBy, shareOf, spendingBy, type Id, type Person, type Share, type Trip, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
@@ -8,6 +8,7 @@ import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
+import { CategorySpend, inCategory } from '../components/CategorySpend.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
@@ -167,13 +168,15 @@ export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Pe
 /** Everything about one trip: members, totals, transactions, balances, per-person. Also used by shared read-only links. */
 export function TripView({ trip }: { trip: Trip }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
-  const [tab, setTab] = useState<'transactions' | 'balances' | 'people'>('transactions');
+  const [tab, setTab] = useState<'transactions' | 'categories' | 'balances' | 'people'>('transactions');
   const [selected, setSelected] = useState<number | null>(null);
+  const [cat, setCat] = useState<string | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
   const selectedTx = selected != null ? txs.find((t) => t.id === selected) : undefined;
   const spend = spendingBy(txs, () => 'all').get('all') ?? new Map();
   const myShare = new Map<string, number>();
   for (const tx of txs) addTo(myShare, tx.currency, shareOf(tx, me.id));
+  const myShareHome = homeSpendingBy(txs, rateCtx, () => '', me.id).get('') ?? new Map<string, number>();
   const fees = new Map<string, number>();
   for (const tx of txs) if (tx.fee_amount) addTo(fees, tx.currency, tx.fee_amount);
   const b = computeBalances(txs);
@@ -195,15 +198,21 @@ export function TripView({ trip }: { trip: Trip }) {
       <div className="chips">{trip.members.map((m) => <span key={m} className="chip static who"><Avatar id={m} name={people.get(m)?.name ?? '?'} small />{who(m)}</span>)}</div>
       <div className="grid-4">
         <Stat label="Total spent (everyone)"><MoneyList map={spend} empty="Nothing yet" /></Stat>
-        {!readOnly && <Stat label="Your share"><MoneyList map={myShare} empty="Nothing yet" /></Stat>}
+        {!readOnly && <Stat label="Your share" foot={foreign && myShareHome.size ? <>≈ <MoneyList map={myShareHome} /> spent by you</> : undefined}><MoneyList map={myShare} empty="Nothing yet" /></Stat>}
         {!readOnly && <Stat label="Your position" foot={foreign && myHome ? `≈ ${formatAmount(myHome, rateCtx.home)}${hb.unconverted.size ? ' + unconverted' : ''}` : undefined}><MoneyList map={b.net.get(me.id) ?? new Map()} sign empty="Settled" /></Stat>}
         {readOnly && <Stat label="Transactions">{txs.length}</Stat>}
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
-        {(['transactions', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'people' ? 'Per person' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
+        {(['transactions', 'categories', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
       {tab === 'transactions' && <div className="panel"><TxList txs={txs} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
+      {tab === 'categories' && (
+        <div className="stack">
+          <CategorySpend txs={txs} person={readOnly ? undefined : me.id} selected={cat} onSelect={setCat} />
+          {cat && <div className="panel"><TxList txs={txs.filter((t) => inCategory(t, cat))} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
+        </div>
+      )}
       {tab === 'balances' && <BalancesView txs={txs} tripId={trip.id} />}
       {tab === 'people' && (
         <div className="panel">
@@ -252,7 +261,7 @@ function TripDetail({ trip }: { trip: Trip }) {
           <button className="primary" onClick={() => openForm({ initial: { type: 'expense', trip_id: trip.id, currency: trip.currency } })} data-testid="trip-add-expense"><Plus />Add expense</button>
         </div>
       </div>
-      <TripView trip={trip} />
+      <TripView key={trip.id} trip={trip} />
       {txs.length === 0 && (
         <div><DangerButton small={false} confirm={`Delete trip "${trip.name}"?`} onConfirm={async () => { await api('DELETE', `/api/trips/${trip.id}`); await reload(); navigate('/trips'); }}>Delete trip</DangerButton></div>
       )}

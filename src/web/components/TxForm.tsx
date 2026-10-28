@@ -266,7 +266,7 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
             )}
             {(isSplit || tx.type === 'income') && (
               <Field label="Category">
-                <input list="categories" value={tx.category ?? ''} onChange={(e) => patch({ category: e.target.value || null })} data-testid="category" />
+                <input list="categories" value={tx.category ?? ''} placeholder="Expenses" onChange={(e) => patch({ category: e.target.value || null })} data-testid="category" />
                 <datalist id="categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
               </Field>
             )}

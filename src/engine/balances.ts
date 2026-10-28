@@ -162,6 +162,30 @@ export function spendingBy(txs: Tx[], key: (tx: Tx) => string): Map<string, Map<
   return out;
 }
 
+/**
+ * Spending per key in the home currency (expenses minus refunds), or only `person`'s share of it.
+ * A real home-currency charge is used as charged, anything else converts at the rate table, and a
+ * share is allocated from that converted total so everyone's shares add up to it exactly. Amounts
+ * with no known rate stay in their own currency, so each value is currency -> amount.
+ */
+export function homeSpendingBy(txs: Tx[], c: RateCtx, key: (tx: Tx) => string, person?: Id): Map<string, Map<string, number>> {
+  const out = new Map<string, Map<string, number>>();
+  for (const tx of txs) {
+    if (tx.type !== 'expense' && tx.type !== 'refund') continue;
+    const i = person == null ? -1 : tx.splits.findIndex((s) => s.person_id === person);
+    if (person != null && !tx.splits[i]?.amount) continue;
+    const conv = conversionOf(tx, c);
+    const leg = tx.from_amount ?? tx.to_amount;
+    const total = !conv ? tx.amount : conv.kind === 'actual' && leg != null ? leg : Math.round(tx.amount * conv.rate);
+    const v = person == null ? total : (allocate(total, tx.splits.map((s) => s.amount))[i] ?? 0);
+    const k = key(tx);
+    let m = out.get(k);
+    if (!m) out.set(k, (m = new Map()));
+    addTo(m, conv ? c.home : tx.currency, tx.type === 'expense' ? v : -v);
+  }
+  return out;
+}
+
 /** Total already refunded against an expense (excluding `exceptId`, used while editing). */
 export const refundedTotal = (txs: Tx[], expenseId: Id, exceptId?: Id): number =>
   txs.filter((t) => t.type === 'refund' && t.linked_tx_id === expenseId && t.id !== exceptId).reduce((s, t) => s + t.amount, 0);

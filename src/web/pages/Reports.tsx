@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Database, Download, Eraser, Upload } from 'lucide-react';
 import { effectsOf, formatAmount, homeValue, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { useLedger } from '../store.tsx';
+import { categoryOf, useLedger } from '../store.tsx';
 import { DangerButton, ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
@@ -89,7 +89,7 @@ export function Reports() {
     else if (v.kind === 'rate') homeEstimated += sign * v.amount;
     else homeActual += sign * v.amount;
   }
-  const byCategory = spendingBy(txs, (t) => t.category || 'Uncategorised');
+  const byCategory = spendingBy(txs, categoryOf);
   const byTrip = spendingBy(txs, (t) => (t.trip_id != null ? (trips.get(t.trip_id)?.name ?? '?') : 'Personal (no trip)'));
   const byMonth = spendingBy(txs, (t) => t.date.slice(0, 7));
   const byPayer = spendingBy(txs.filter((t) => t.type === 'expense' || t.type === 'refund'), (t) => who(t.payer_id));

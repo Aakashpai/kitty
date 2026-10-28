@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type RateCtx, type Trip, type UserPublic } from '../engine/index.ts';
+import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type RateCtx, type Trip, type Tx, type UserPublic } from '../engine/index.ts';
 import { api, errorText } from './api.ts';
 import { Login, Setup } from './pages/Auth.tsx';
 
@@ -195,7 +195,9 @@ export function useLedger(): Ledger {
 
 export const today = () => new Date().toISOString().slice(0, 10);
 export const COMMON_CURRENCIES = ['INR', 'SGD', 'USD', 'EUR', 'GBP', 'AED', 'THB', 'MYR', 'IDR', 'JPY', 'AUD', 'LKR', 'VND', 'CHF', 'HKD', 'KRW', 'NPR', 'CAD'];
-export const CATEGORIES = ['Food', 'Groceries', 'Accommodation', 'Flights', 'Transport', 'Activities', 'Shopping', 'Entertainment', 'Health', 'Fees', 'Salary', 'Gift', 'Other'];
+export const CATEGORIES = ['Food', 'Travel', 'Shopping', 'Activities', 'Expenses'];
+/** Category an entry groups under; entries without one (mostly cash spends) count as Expenses. */
+export const categoryOf = (t: Tx) => t.category || 'Expenses';
 
 /** Copies text, falling back to a prompt where the clipboard API is unavailable (http on LAN, old browsers). */
 export async function copyText(text: string): Promise<boolean> {

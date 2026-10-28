@@ -171,6 +171,7 @@ tfoot td { border-top: 1px solid var(--border); border-bottom: 0; font-weight: 5
 .num, td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 th.num { font-family: var(--font); }
 tr.clickable { cursor: pointer; }
+tr.clickable.on td { background: var(--surface-2); }
 .actions { text-align: right; white-space: nowrap; }
 .actions button + button, .actions button + .danger-wrap, .actions .danger-wrap + button { margin-left: 4px; }
 @media (hover: hover) and (pointer: fine) { tr.clickable:hover td { background: var(--surface-2); } }

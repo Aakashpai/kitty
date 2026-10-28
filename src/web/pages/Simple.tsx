@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, shareOf, spendingBy, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
 import { useLedger } from '../store.tsx';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
+import { CategorySpend, inCategory } from '../components/CategorySpend.tsx';
 import { Avatar, Money, MoneyList } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
@@ -14,6 +15,7 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<Tx | null>(null);
+  const [cat, setCat] = useState<string | null>(null);
   // A person share link, or the admin opening someone from People: the page speaks about that person and shows only their entries.
   const focus = focusProp ?? (readOnly && state.shared_person_id != null ? me.id : null);
   const subject = focus ?? me.id;
@@ -31,8 +33,6 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const isYou = subject === me.id;
   const name = isYou ? 'You' : who(subject);
   const own = isYou ? 'Your' : `${who(subject)}’s`;
-  const myShare = new Map<string, number>();
-  for (const tx of txs) { const v = shareOf(tx, subject); if (v) myShare.set(tx.currency, (myShare.get(tx.currency) ?? 0) + v); }
   // Exact pair debts. The home-currency figure comes from the same calculation as the headline, so the two always agree;
   // the per-currency pieces sit underneath (negative = owed back the other way). Without a rate for some currency, pieces only.
   const mine = (d: { from: Id; to: Id }) => focus == null || d.from === focus || d.to === focus;
@@ -54,12 +54,12 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
       addPart(row.parts, x.currency, x.amount);
     }
   }
-  const spend = spendingBy(txs, () => 'all').get('all') ?? new Map<string, number>();
   const Person = ({ id }: { id: Id }) => <span className="who"><Avatar id={id} name={people.get(id)?.name ?? '?'} small />{who(id)}</span>;
-  const recent = showAll ? txs : txs.slice(0, RECENT);
+  const listed = cat ? txs.filter((t) => inCategory(t, cat)) : txs;
+  const recent = showAll ? listed : listed.slice(0, RECENT);
   return (
     <div className="simple stack">
-      {onScope && state.trips.length > 0 && <ScopeSeg value={scope} onChange={onScope} testId="simple-scope" />}
+      {onScope && state.trips.length > 0 && <ScopeSeg value={scope} onChange={(s) => { setCat(null); onScope(s); }} testId="simple-scope" />}
       {(!readOnly || focus != null) && (
         <div className={`simple-hero ${myHome > 0 ? 'pos' : myHome < 0 ? 'neg' : ''}`} data-testid="simple-hero">
           <div className="label">{settled ? `${name} ${isYou ? 'are' : 'is'} settled up` : myHome > 0 ? `${name} ${isYou ? 'are' : 'is'} owed` : myHome < 0 ? `${name} ${isYou ? 'owe' : 'owes'}` : `${own} position`}</div>
@@ -84,10 +84,10 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
       </section>
       <section>
         <h2>{focus != null ? `${own} share of spending` : `Spent${trip ? ` on ${trip.name}` : ''}`}</h2>
-        <div className="panel"><div className="simple-row"><span className="muted">{focus != null ? 'Across the entries below' : 'Everyone together'}</span><span className="amt"><MoneyList map={focus != null ? myShare : spend} empty="Nothing yet" /></span></div></div>
+        <CategorySpend txs={txs} person={readOnly && focus == null ? undefined : subject} label={isYou ? 'You' : who(subject)} everyone={focus == null} selected={cat} onSelect={setCat} />
       </section>
       <section>
-        <div className="row between"><h2>{showAll ? 'All entries' : 'Latest'}</h2>{txs.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${txs.length}`}</button>}</div>
+        <div className="row between"><h2>{cat ? `${cat} entries` : showAll ? 'All entries' : 'Latest'}</h2>{listed.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${listed.length}`}</button>}</div>
         <div className="panel"><TxList txs={recent} showTrip={!trip} onSelect={setSelected} as={subject} /></div>
       </section>
       {selected && <TxDetail tx={selected} onClose={() => setSelected(null)} />}
