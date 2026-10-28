@@ -114,7 +114,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 .nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--surface-3); color: var(--text); }
 .nav a .dot { width: 16px; display: grid; place-items: center; }
-.flag { font-family: 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif; line-height: 1; flex: none; font-weight: 400; }
+/* Apple's own emoji first: Safari can't draw the Noto web font's colour format, so flags came out blank there. */
+.flag { font-family: 'Apple Color Emoji', 'Noto Color Emoji', 'Segoe UI Emoji', sans-serif; line-height: 1; flex: none; font-weight: 400; }
 .nav a .flag { width: 16px; text-align: center; font-size: 13px; }
 .seg button .flag, .who .flag, .trip-card .name .flag { font-size: 14px; }
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
