@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { ArrowRightLeft, Banknote, HandCoins, Receipt, TrendingUp, Undo2, X, type LucideIcon } from 'lucide-react';
+import { ArrowRightLeft, Banknote, BedDouble, Gift, HandCoins, HeartPulse, Plane, Receipt, ShoppingBag, ShoppingCart, Tag, Ticket, TrendingUp, Undo2, Utensils, Wine, X, Zap, type LucideIcon } from 'lucide-react';
 import { formatAmount, type TxType } from '../../engine/index.ts';
 
 /** Kitty's mark: a coin with ears. Inherits currentColor; eyes use --logo-eye (defaults to the primary surface). */
@@ -38,13 +38,55 @@ export function useBusy(): [boolean, <T>(fn: () => Promise<T>) => Promise<T | un
 export const TYPE_LABEL: Record<TxType, string> = { expense: 'Expense', transfer: 'Transfer', withdrawal: 'Cash withdrawal', repayment: 'Repayment', income: 'Income', refund: 'Refund' };
 export const TYPE_ICON: Record<TxType, LucideIcon> = { expense: Receipt, transfer: ArrowRightLeft, withdrawal: Banknote, repayment: HandCoins, income: TrendingUp, refund: Undo2 };
 
-export const TypeIcon = ({ type, small = false }: { type: TxType; small?: boolean }) => {
-  const I = TYPE_ICON[type];
-  return <span className={`ticon ${type} ${small ? 'sm' : ''}`} aria-hidden><I /></span>;
+// Icon and fixed hue per category, so Food is always the same orange fork and knife; Expenses and custom ones stay neutral.
+const CATEGORY_LOOK: Record<string, [LucideIcon, number | null]> = {
+  Food: [Utensils, 24], Drinks: [Wine, 330], Groceries: [ShoppingCart, 95], Travel: [Plane, 205], Stay: [BedDouble, 250],
+  Shopping: [ShoppingBag, 285], Activities: [Ticket, 160], Health: [HeartPulse, 355], Bills: [Zap, 45], Gifts: [Gift, 310], Expenses: [Receipt, null],
+};
+const lookOf = (category: string | null | undefined) => CATEGORY_LOOK[category || 'Expenses'] ?? [Tag, null];
+const hue = (h: number | null) => (h == null ? undefined : ({ '--h': h }) as CSSProperties);
+
+/** Inline category glyph, tinted with the category's hue (for chips and table rows). */
+export const CategoryGlyph = ({ category }: { category: string | null | undefined }) => {
+  const [I, h] = lookOf(category);
+  return <I className={`cat-glyph${h == null ? '' : ' tint'}`} style={hue(h)} aria-hidden />;
+};
+
+/** Square tile for a row: expenses show their category, everything else its type. */
+export const TypeIcon = ({ type, category, small = false }: { type: TxType; category?: string | null; small?: boolean }) => {
+  const [I, h] = type === 'expense' ? lookOf(category) : [TYPE_ICON[type], null];
+  return <span className={`ticon ${h == null ? type : 'cat'} ${small ? 'sm' : ''}`} style={hue(h)} aria-hidden><I /></span>;
 };
 export const TypeBadge = ({ type }: { type: TxType }) => {
   const I = TYPE_ICON[type];
   return <span className={`badge type-${type}`}><I />{TYPE_LABEL[type]}</span>;
+};
+
+// Country names come from the browser (Intl), so there is no list to keep; only short forms people type are added here.
+const ALIASES: Record<string, string> = { usa: 'US', uk: 'GB', uae: 'AE', england: 'GB', scotland: 'GB', wales: 'GB', turkey: 'TR', 'czech republic': 'CZ', holland: 'NL', macau: 'MO', 'ivory coast': 'CI' };
+let countries: { re: RegExp; codes: Map<string, string> } | null = null;
+const countryIndex = () => {
+  const dn = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' });
+  const codes = new Map(Object.entries(ALIASES));
+  for (let a = 65; a <= 90; a++) for (let b = 65; b <= 90; b++) {
+    const code = String.fromCharCode(a, b), name = dn.of(code);
+    if (!name || name === code || /unknown|world|europe|nations|outlying|pseudo/i.test(name)) continue;
+    for (const n of [name, name.replace(/\s*\(.*\)|\s+SAR China/g, ''), /\((.*)\)/.exec(name)?.[1]]) if (n) codes.set(n.toLowerCase(), code);
+  }
+  // Longest first so "South Sudan" beats "Sudan"; letters on either side rule out "Oman" inside "Romania".
+  const alts = [...codes.keys()].sort((x, y) => y.length - x.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return { re: new RegExp(`(?<!\\p{L})(${alts.join('|')})(?!\\p{L})`, 'iu'), codes };
+};
+/** "Singapore 2026" -> 🇸🇬; null when the name has no country in it. */
+export const flagOf = (name: string): string | null => {
+  countries ??= countryIndex();
+  const code = countries.codes.get(countries.re.exec(name)?.[1]?.toLowerCase() ?? '');
+  return code ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : null;
+};
+/** A trip's mark: its country's flag when the name has one, otherwise the coloured dot passed in. */
+export const TripMark = ({ name, children }: { name: string; children: ReactNode }) => {
+  const flag = flagOf(name);
+  return flag ? <span className="flag" aria-hidden>{flag}</span> : <>{children}</>;
 };
 
 /** Stable hue per entity id, so a person or trip keeps its colour everywhere. */

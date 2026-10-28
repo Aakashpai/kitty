@@ -5,7 +5,7 @@ import { useLedger } from '../store.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
-import { Field, TYPE_LABEL, hueStyle } from '../components/ui.tsx';
+import { Field, TYPE_LABEL, TripMark, hueStyle } from '../components/ui.tsx';
 
 type Sort = 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc';
 
@@ -17,7 +17,7 @@ export function ScopeSeg({ value, onChange, testId }: { value: string; onChange:
       <button className={value === '' ? 'on' : ''} onClick={() => onChange('')}>All</button>
       <button className={value === 'none' ? 'on' : ''} onClick={() => onChange('none')}>Personal</button>
       {state.trips.filter((t) => !t.archived || String(t.id) === value).map((t) => (
-        <button key={t.id} className={value === String(t.id) ? 'on' : ''} onClick={() => onChange(String(t.id))} style={hueStyle(t.id)}><span className="dot" />{t.name}</button>
+        <button key={t.id} className={value === String(t.id) ? 'on' : ''} onClick={() => onChange(String(t.id))} style={hueStyle(t.id)}><TripMark name={t.name}><span className="dot" /></TripMark>{t.name}</button>
       ))}
     </div>
   );

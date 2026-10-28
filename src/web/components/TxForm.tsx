@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   allocate, computeBalances, decimalsOf, emptyTx, formatAmount, pairwiseDebts, parseAmount, refundedTotal, toMajor, validateTx,
   TX_TYPES, type Account, type Id, type Split, type SplitMethod, type Tx, type TxInput, type TxType,
 } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { CATEGORIES, COMMON_CURRENCIES, today, useLedger } from '../store.tsx';
+import { CATEGORIES, COMMON_CURRENCIES, categoryOf, guessCategory, today, useLedger } from '../store.tsx';
 import { X } from 'lucide-react';
-import { ErrorBox, Field, Money, TYPE_LABEL, TypeIcon } from './ui.tsx';
+import { CategoryGlyph, ErrorBox, Field, Money, TYPE_LABEL, TypeIcon } from './ui.tsx';
 import { EffectsView } from './effectsView.tsx';
 
 const TYPE_HELP: Record<TxType, string> = {
@@ -64,6 +64,22 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
 
   const patch = (p: Partial<TxInput>) => setTx((t) => ({ ...t, ...p }));
+  // Escape closes, like every other dialog (a click outside already does).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  // A new expense takes its category from the description until the category is picked by hand.
+  const catPicked = useRef(!!existing || !!initial?.category);
+  const [otherCat, setOtherCat] = useState(() => (tx.category && !CATEGORIES.includes(tx.category) ? tx.category : ''));
+  const pickCategory = (category: string | null) => { catPicked.current = true; patch({ category }); };
+  // Typed names snap to a preset's spelling ("food" is Food), so the same category never splits into two rows.
+  const typeCategory = (text: string) => {
+    setOtherCat(text);
+    const v = text.trim();
+    pickCategory(CATEGORIES.find((c) => c.toLowerCase() === v.toLowerCase()) ?? (v || null));
+  };
   const setText = (k: keyof Texts, v: string) => setTexts((t) => ({ ...t, [k]: v }));
   const isSplit = tx.type === 'expense' || tx.type === 'refund';
   const isMove = tx.type === 'transfer' || tx.type === 'withdrawal';
@@ -252,7 +268,7 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
             </Field>
             <datalist id="currencies">{COMMON_CURRENCIES.map((c) => <option key={c} value={c} />)}</datalist>
             <Field label="Description" className={isMove ? '' : 'span-2'}>
-              <input value={tx.description} placeholder={tx.type === 'expense' ? 'Dinner at Lau Pa Sat' : tx.type === 'withdrawal' ? 'ATM at Changi' : ''} onChange={(e) => patch({ description: e.target.value })} data-testid="description" />
+              <input value={tx.description} placeholder={tx.type === 'expense' ? 'Dinner at Lau Pa Sat' : tx.type === 'withdrawal' ? 'ATM at Changi' : ''} onChange={(e) => patch({ description: e.target.value, ...(tx.type === 'expense' && !catPicked.current ? { category: guessCategory(e.target.value) } : {}) })} data-testid="description" />
             </Field>
             {tx.type !== 'income' && (
               <Field label="Trip" hint={tx.type === 'repayment' ? 'Tag it to count against that trip’s balance' : undefined}>
@@ -264,10 +280,19 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
                 </select>
               </Field>
             )}
-            {(isSplit || tx.type === 'income') && (
+            {isSplit && (
+              <Field label="Category" className="span-2">
+                <div className="chips" role="radiogroup" aria-label="Category">
+                  {CATEGORIES.map((c) => (
+                    <button type="button" key={c} role="radio" aria-checked={categoryOf(tx) === c} className={`chip ${categoryOf(tx) === c ? 'on' : ''}`} onClick={() => { setOtherCat(''); pickCategory(c === 'Expenses' ? null : c); }} data-testid={`category-chip-${c}`}><CategoryGlyph category={c} />{c}</button>
+                  ))}
+                  <input className="chip-input" value={otherCat} placeholder="Other…" maxLength={40} onChange={(e) => typeCategory(e.target.value)} aria-label="Other category" data-testid="category" />
+                </div>
+              </Field>
+            )}
+            {tx.type === 'income' && (
               <Field label="Category">
-                <input list="categories" value={tx.category ?? ''} placeholder="Expenses" onChange={(e) => patch({ category: e.target.value || null })} data-testid="category" />
-                <datalist id="categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
+                <input value={tx.category ?? ''} placeholder="Salary, gift…" onChange={(e) => patch({ category: e.target.value || null })} data-testid="category" />
               </Field>
             )}
           </div>

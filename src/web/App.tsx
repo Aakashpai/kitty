@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
+import { flushSync } from 'react-dom';
 import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import type { TxInput, Tx } from '../engine/index.ts';
 import { LedgerProvider, useLedger } from './store.tsx';
@@ -17,7 +18,7 @@ import { InviteAccept } from './pages/Auth.tsx';
 import { SharedPage } from './pages/Shared.tsx';
 import { SimpleView } from './pages/Simple.tsx';
 import { TxFormCtx, type OpenTxForm } from './components/txFormContext.ts';
-import { APP_NAME, Avatar, Logo, hueStyle } from './components/ui.tsx';
+import { APP_NAME, Avatar, Logo, TripMark, hueStyle } from './components/ui.tsx';
 import { AccountModal } from './components/AccountModal.tsx';
 
 const NAV: [string, string, LucideIcon][] = [
@@ -37,7 +38,19 @@ const useTheme = () => {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('theme', theme); } catch { /* private mode */ }
   }, [theme]);
-  return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))] as const;
+  // The new theme spreads as a circle from where the toggle was pressed (centre of the button from the keyboard).
+  const toggle = (e: MouseEvent<HTMLElement>) => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    const apply = () => { document.documentElement.dataset.theme = next; flushSync(() => setTheme(next)); };
+    if (!document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) return apply();
+    const b = e.currentTarget.getBoundingClientRect();
+    const x = e.detail ? e.clientX : b.left + b.width / 2, y = e.detail ? e.clientY : b.top + b.height / 2;
+    const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    void document.startViewTransition(apply).ready.then(() =>
+      document.documentElement.animate({ clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] }, { duration: 500, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', pseudoElement: '::view-transition-new(root)' }),
+    ).catch(() => undefined);
+  };
+  return [theme, toggle] as const;
 };
 
 /** "Simple view": one phone-friendly page instead of the full app. Off by default; remembered per device. */
@@ -116,7 +129,7 @@ function Shell() {
           <nav className="nav" aria-label="Trips">
             {trips.map((t) => (
               <a key={t.id} href={`#/trips/${t.id}`} className={`trip-link ${section === 'trips' && id === t.id ? 'active' : ''}`} style={hueStyle(t.id)}>
-                <span className="dot"><i /></span><span className="name">{t.name}</span>
+                <TripMark name={t.name}><span className="dot"><i /></span></TripMark><span className="name">{t.name}</span>
               </a>
             ))}
             {trips.length === 0 && <span className="faint small trip-link" style={{ padding: '4px 10px' }}>No trips yet</span>}

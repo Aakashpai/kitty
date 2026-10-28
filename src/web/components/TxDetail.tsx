@@ -69,7 +69,7 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
     <Modal title={tx.description || 'Transaction'} onClose={onClose}>
       <div className="stack" data-testid="tx-detail">
         <div className="row between">
-          <span className="row"><TypeIcon type={tx.type} /><span><TypeBadge type={tx.type} /><div className="faint small mono">#{tx.id}</div></span></span>
+          <span className="row"><TypeIcon type={tx.type} category={tx.category} /><span><TypeBadge type={tx.type} /><div className="faint small mono">#{tx.id}</div></span></span>
           <span className="mono" style={{ fontSize: 22, fontWeight: 500 }}>{formatAmount(tx.amount, tx.currency)}</span>
         </div>
         <dl className="kv">

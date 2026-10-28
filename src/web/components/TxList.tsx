@@ -55,7 +55,7 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
         const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, showTrip && trip?.name].filter(Boolean).join(' · ');
         return (
           <button type="button" key={tx.id} className="txrow" onClick={() => onSelect(tx)} data-testid={`tx-row-${tx.id}`}>
-            <TypeIcon type={tx.type} />
+            <TypeIcon type={tx.type} category={tx.category} />
             <span className="body">
               <span className="title">{tx.description || TYPE_LABEL[tx.type]}</span>
               <span className="meta">{meta}</span>

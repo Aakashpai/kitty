@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronLeft, Copy, Link2, MoreHorizontal, Plus, UserPlus } from 'lucide-react';
-import { computeHomeBalances, formatAmount, pairwiseDebts, type Invite, type Person } from '../../engine/index.ts';
+import { computeHomeBalances, formatAmount, pairwiseDebts, type Invite, type Person, type Share } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { copyText, useLedger } from '../store.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
@@ -35,6 +35,18 @@ export function People() {
     await copyText(inviteUrl(i));
     setCopied(i.id);
     window.setTimeout(() => setCopied(null), 1500);
+  };
+  // Every live view-only link, whoever made it, so the owner can see what is out there and turn any of it off.
+  const [copiedLink, setCopiedLink] = useState<number | null>(null);
+  const linkWhat = (x: Share) => {
+    const trip = x.trip_id != null ? (state.trips.find((t) => t.id === x.trip_id)?.name ?? 'A trip') : null;
+    const person = x.person_id != null ? `${state.people.find((p) => p.id === x.person_id)?.name ?? 'Someone'}’s view` : null;
+    return trip && person ? `${trip} · ${person}` : (trip ?? `${person} · all trips`);
+  };
+  const copyLink = async (x: Share) => {
+    await copyText(`${window.location.origin}${window.location.pathname}#/s/${x.token}${x.person_id != null ? '/simple' : ''}`);
+    setCopiedLink(x.id);
+    window.setTimeout(() => setCopiedLink(null), 1500);
   };
   const tripsOf = (id: number) => state.trips.filter((t) => t.members.includes(id)).length;
 
@@ -158,6 +170,31 @@ export function People() {
             </table>
           </div>
           <div className="panel-foot">Each trip is its own group: someone who signs in sees only the trips you add them to and entries that involve them, from their own point of view. You see everything. Send an invite link privately; whoever opens it first gets that person's seat.</div>
+        </div>
+      )}
+      {isOwner && (
+        <div className="panel" data-testid="links-panel">
+          <div className="panel-head"><h3>Shared links</h3><span className="faint small">View-only links that work right now, made by you or a member</span></div>
+          {state.shares.length === 0 ? <div className="panel-body faint small">No links are on.</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Shows</th><th>Made by</th><th>Created</th><th></th></tr></thead>
+                <tbody>
+                  {state.shares.map((x) => (
+                    <tr key={x.id} data-testid={`link-${x.id}`}>
+                      <td><div>{linkWhat(x)}</div>{x.label && <div className="faint small">{x.label}</div>}</td>
+                      <td className="muted">{state.users?.find((u) => u.id === x.created_by)?.name ?? '—'}</td>
+                      <td className="muted">{fmtDate(x.created_at.slice(0, 10))}</td>
+                      <td className="actions">
+                        <button className="small" onClick={() => void copyLink(x)} data-testid={`copy-link-${x.id}`}><Copy />{copiedLink === x.id ? 'Copied' : 'Copy link'}</button>
+                        <DangerButton confirm="Turn this link off? Anyone who has it loses access straight away." onConfirm={() => run(() => api('DELETE', `/api/shares/${x.id}`))}>Turn off</DangerButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
       {sharing && <ShareModal person={sharing} onClose={() => setSharing(null)} />}

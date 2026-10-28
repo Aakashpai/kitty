@@ -9,7 +9,7 @@ import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
-import { Avatar, DangerButton, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
+import { Avatar, DangerButton, TripMark, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
 
@@ -82,7 +82,7 @@ function TripCard({ trip }: { trip: Trip }) {
   return (
     <a className="panel trip-card" href={`#/trips/${trip.id}`} style={hueStyle(trip.id)} data-testid={`trip-card-${trip.id}`}>
       <div className="row between">
-        <span className="name"><i />{trip.name}</span>
+        <span className="name"><TripMark name={trip.name}><i /></TripMark>{trip.name}</span>
         <span className="badge">{trip.currency}</span>
       </div>
       <div className="row between">
@@ -251,7 +251,7 @@ function TripDetail({ trip }: { trip: Trip }) {
       <div className="page-head">
         <div>
           <a href="#/trips" className="back"><ChevronLeft />All trips</a>
-          <h1 className="row" style={{ gap: 10 }}><i className="avatar" style={{ ...hueStyle(trip.id), width: 12, height: 12 }} />{trip.name}{trip.archived ? <span className="badge">archived</span> : null}</h1>
+          <h1 className="row" style={{ gap: 10 }}><TripMark name={trip.name}><i className="avatar" style={{ ...hueStyle(trip.id), width: 12, height: 12 }} /></TripMark>{trip.name}{trip.archived ? <span className="badge">archived</span> : null}</h1>
           <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
         </div>
         <div className="row">

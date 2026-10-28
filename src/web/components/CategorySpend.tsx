@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronUp, HandCoins, Undo2 } from 'lucide-react';
 import { homeSpendingBy, type Id, type Tx } from '../../engine/index.ts';
 import { CATEGORIES, categoryOf, useLedger } from '../store.tsx';
-import { MoneyList } from './ui.tsx';
+import { CategoryGlyph, MoneyList } from './ui.tsx';
 
 /** A picked row of the table: its label and which entries sit behind it. */
 export interface CategoryPick {
@@ -62,9 +62,9 @@ export function CategorySpend({ txs, person, label = 'You', everyone = true, com
   const visible = repayRows.filter((r) => [r.all, r.mine].some((m) => m && [...m.values()].some((v) => v !== 0)));
   const pick = (p: CategoryPick) => onSelect(selected === p.label ? null : p);
   const cell = (m?: Map<string, number>) => <MoneyList map={m ?? new Map()} />;
-  const row = (p: CategoryPick, a?: Map<string, number>, b?: Map<string, number>) => (
+  const row = (p: CategoryPick, icon: ReactNode, a?: Map<string, number>, b?: Map<string, number>) => (
     <tr key={p.label} className={`clickable ${selected === p.label ? 'on' : ''}`} tabIndex={0} role="button" aria-pressed={selected === p.label} onClick={() => pick(p)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p); } }} data-testid={`category-${p.label}`}>
-      <td>{p.label}</td>
+      <td><span className="who">{icon}{p.label}</span></td>
       {everyone && <td className="num">{cell(a)}</td>}
       {mine && <td className="num">{cell(b)}</td>}
     </tr>
@@ -76,11 +76,11 @@ export function CategorySpend({ txs, person, label = 'You', everyone = true, com
         <table>
           <thead><tr><th>Category</th>{everyone && <th className="num">Everyone</th>}{mine && <th className="num">{label}</th>}</tr></thead>
           <tbody>
-            {open && cats.map((c) => row({ label: c, match: (t) => (t.type === 'expense' || t.type === 'refund') && spendKey(t) === c }, all.get(c), mine?.get(c)))}
+            {open && cats.map((c) => row({ label: c, match: (t) => (t.type === 'expense' || t.type === 'refund') && spendKey(t) === c }, c === REFUNDS ? <Undo2 className="cat-glyph" aria-hidden /> : <CategoryGlyph category={c} />, all.get(c), mine?.get(c)))}
           </tbody>
           <tfoot>
             <tr><td>Total spent</td>{everyone && <td className="num">{cell(sum(all))}</td>}{mine && <td className="num" data-testid="category-mine-total">{cell(sum(mine))}</td>}</tr>
-            {open && visible.map((r) => row(r, r.all, r.mine))}
+            {open && visible.map((r) => row(r, <HandCoins className="cat-glyph" aria-hidden />, r.all, r.mine))}
           </tfoot>
         </table>
       </div>

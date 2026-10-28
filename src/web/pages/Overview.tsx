@@ -6,7 +6,7 @@ import { useLedger } from '../store.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
-import { Empty, ErrorBox, MoneyList, Stat, fmtWhen, hueStyle } from '../components/ui.tsx';
+import { Empty, ErrorBox, MoneyList, Stat, TripMark, fmtWhen, hueStyle } from '../components/ui.tsx';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
 
@@ -148,7 +148,7 @@ export function Overview() {
                     const spent = spendingBy(txs, () => 'all').get('all') ?? new Map<string, number>();
                     return (
                       <tr key={t.id} className="clickable" onClick={() => { window.location.hash = `/trips/${t.id}`; }}>
-                        <td><span className="who" style={hueStyle(t.id)}><i className="avatar sm" style={{ width: 8, height: 8 }} />{t.name}</span><div className="faint small">{t.members.map(who).join(', ')}</div></td>
+                        <td><span className="who" style={hueStyle(t.id)}><TripMark name={t.name}><i className="avatar sm" style={{ width: 8, height: 8 }} /></TripMark>{t.name}</span><div className="faint small">{t.members.map(who).join(', ')}</div></td>
                         <td className="num"><MoneyList map={spent} empty="—" /><div className="small"><MoneyList map={net} sign empty="settled" /></div></td>
                       </tr>
                     );

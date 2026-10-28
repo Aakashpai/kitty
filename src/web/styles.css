@@ -10,6 +10,8 @@
   --text: #ecedf0;
   --text-2: #a3aab6;
   --text-3: #6b7380;
+  --cat-fg: 68%; /* category tint: icon lightness on its tile */
+  --cat-bg: 0.16; /* category tile opacity */
   --accent: #8fb3ff;
   --accent-bg: rgba(143, 179, 255, 0.14);
   --primary: #ffffff;
@@ -50,6 +52,8 @@
   --text: #0f1115;
   --text-2: #5b6472;
   --text-3: #8a919e;
+  --cat-fg: 40%;
+  --cat-bg: 0.12;
   --accent: #2f6bff;
   --accent-bg: rgba(47, 107, 255, 0.1);
   --primary: #0f1115;
@@ -110,6 +114,10 @@ ul { margin: 0; padding: 0; list-style: none; }
 .nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--surface-3); color: var(--text); }
 .nav a .dot { width: 16px; display: grid; place-items: center; }
+.flag { font-family: 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif; line-height: 1; flex: none; font-weight: 400; }
+.nav a .flag { width: 16px; text-align: center; font-size: 13px; }
+.seg button .flag, .who .flag, .trip-card .name .flag { font-size: 14px; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 .nav a .dot i { width: 7px; height: 7px; border-radius: 50%; background: hsl(var(--h) 60% 60%); }
 .nav a .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-label { display: flex; align-items: center; justify-content: space-between; padding: 18px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
@@ -121,7 +129,7 @@ ul { margin: 0; padding: 0; list-style: none; }
 .side-body { display: contents; }
 .shortcut { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-3); font-size: 12px; }
 .kbd { font-family: var(--mono); font-size: 11px; line-height: 1; padding: 3px 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; color: var(--text-2); }
-.main { padding: 28px 32px 56px; max-width: 1180px; width: 100%; min-width: 0; }
+.main { padding: 28px 32px 56px; max-width: 1180px; width: 100%; min-width: 0; margin: 0 auto; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-5); }
 .page-head .sub { color: var(--text-2); font-size: 13px; margin-top: 4px; }
 .back { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); font-size: 13px; margin-bottom: 6px; }
@@ -195,6 +203,12 @@ tr.clickable.on td { background: var(--surface-2); }
 .ticon.income, .ticon.refund { background: var(--pos-bg); color: var(--pos); }
 .ticon.repayment { background: var(--info-bg); color: var(--info); }
 .ticon.transfer, .ticon.withdrawal { background: var(--warn-bg); color: var(--warn); }
+.ticon.cat { background: hsl(var(--h) 75% 55% / var(--cat-bg)); color: hsl(var(--h) 70% var(--cat-fg)); }
+.cat-glyph { width: 15px; height: 15px; flex: none; color: var(--text-3); }
+.cat-glyph.tint { color: hsl(var(--h) 70% var(--cat-fg)); }
+.chip .cat-glyph { width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; }
+.chip.on .cat-glyph { color: inherit; }
+.chips .chip-input { height: 28px; width: 120px; padding: 0 11px; border-radius: 999px; font-size: 12.5px; }
 .ticon.sm { width: 26px; height: 26px; border-radius: 8px; }
 .ticon.sm svg { width: 14px; height: 14px; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; letter-spacing: 0; background: hsl(var(--h, 220) 50% 50% / 0.22); color: var(--text); flex: none; }
@@ -245,6 +259,7 @@ input[type='date'] { font-family: var(--mono); font-size: 13px; }
 .chip { height: 28px; padding: 0 11px; border-radius: 999px; font-size: 12.5px; font-weight: 500; border: 1px solid var(--border-strong); background: transparent; color: var(--text-2); }
 .chip.on { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
 .chip.static { cursor: default; }
+.chip.who { padding-left: 2px; } /* the avatar nests in the rounded end instead of floating inside it */
 .seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .seg button { height: 28px; padding: 0 11px; border: 0; background: transparent; color: var(--text-2); font-size: 12.5px; border-radius: 7px; }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 1px var(--border); }

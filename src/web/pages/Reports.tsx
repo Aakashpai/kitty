@@ -3,7 +3,7 @@ import { Database, Download, Eraser, Upload } from 'lucide-react';
 import { effectsOf, formatAmount, homeValue, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { categoryOf, useLedger } from '../store.tsx';
-import { DangerButton, ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
+import { CategoryGlyph, DangerButton, ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
@@ -20,7 +20,7 @@ const csvCell = (v: unknown) => {
 };
 
 /** One row per key; each currency gets its own meter scaled to that currency's largest row. */
-function GroupTable({ title, groups, note }: { title: string; groups: Map<string, Map<string, number>>; note?: string }) {
+function GroupTable({ title, groups, note, icons = false }: { title: string; groups: Map<string, Map<string, number>>; note?: string; icons?: boolean }) {
   const rows = [...groups].sort(([a], [b]) => a.localeCompare(b));
   const max = new Map<string, number>();
   for (const [, m] of rows) for (const [cur, v] of m) max.set(cur, Math.max(max.get(cur) ?? 0, Math.abs(v)));
@@ -33,7 +33,7 @@ function GroupTable({ title, groups, note }: { title: string; groups: Map<string
             <tbody>
               {rows.map(([k, m]) => (
                 <tr key={k}>
-                  <td style={{ width: '38%' }}>{k}</td>
+                  <td style={{ width: '38%' }}>{icons ? <span className="who"><CategoryGlyph category={k} />{k}</span> : k}</td>
                   <td>
                     {[...m].filter(([, v]) => v !== 0).sort(([a], [b]) => a.localeCompare(b)).map(([cur, v]) => (
                       <div key={cur} className="row" style={{ flexWrap: 'nowrap', gap: 10 }}>
@@ -151,7 +151,7 @@ export function Reports() {
         </Stat>
       </div>
       <div className="grid-2">
-        <GroupTable title="By category" groups={byCategory} note="Expenses minus linked refunds." />
+        <GroupTable title="By category" groups={byCategory} note="Expenses minus linked refunds." icons />
         <GroupTable title="By trip" groups={byTrip} />
         <GroupTable title="By month" groups={byMonth} />
         <GroupTable title="Each person's share" groups={byPerson} note="What each person consumed, regardless of who paid." />
