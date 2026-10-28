@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { homeSpendingBy, type Id, type Tx } from '../../engine/index.ts';
 import { CATEGORIES, categoryOf, useLedger } from '../store.tsx';
 import { MoneyList } from './ui.tsx';
@@ -24,17 +26,23 @@ const sum = (groups: Map<string, Map<string, number>>) => {
 /**
  * Spending per category in the home currency (everyone's total, one person's share, or both), refunds as their own
  * row, then repayments below the total in the currency that changed hands. Selecting a row picks it (again to clear),
- * so the caller can list the entries behind it.
+ * so the caller can list the entries behind it. `compact` opens on the total alone, with the breakdown one tap away.
  */
-export function CategorySpend({ txs, person, label = 'You', everyone = true, selected, onSelect }: {
+export function CategorySpend({ txs, person, label = 'You', everyone = true, compact = false, selected, onSelect }: {
   txs: Tx[];
   person?: Id;
   label?: string;
   everyone?: boolean;
+  compact?: boolean;
   selected: string | null;
   onSelect: (pick: CategoryPick | null) => void;
 }) {
   const { rateCtx } = useLedger();
+  const [open, setOpen] = useState(!compact);
+  const toggle = () => {
+    if (open && selected) onSelect(null); // closing must not leave the entries list filtered by a hidden row
+    setOpen(!open);
+  };
   const all = homeSpendingBy(txs, rateCtx, spendKey);
   const mine = person != null ? homeSpendingBy(txs, rateCtx, spendKey, person) : null;
   const shown = everyone || !mine ? all : mine;
@@ -68,15 +76,20 @@ export function CategorySpend({ txs, person, label = 'You', everyone = true, sel
         <table>
           <thead><tr><th>Category</th>{everyone && <th className="num">Everyone</th>}{mine && <th className="num">{label}</th>}</tr></thead>
           <tbody>
-            {cats.map((c) => row({ label: c, match: (t) => (t.type === 'expense' || t.type === 'refund') && spendKey(t) === c }, all.get(c), mine?.get(c)))}
+            {open && cats.map((c) => row({ label: c, match: (t) => (t.type === 'expense' || t.type === 'refund') && spendKey(t) === c }, all.get(c), mine?.get(c)))}
           </tbody>
           <tfoot>
             <tr><td>Total spent</td>{everyone && <td className="num">{cell(sum(all))}</td>}{mine && <td className="num" data-testid="category-mine-total">{cell(sum(mine))}</td>}</tr>
-            {visible.map((r) => row(r, r.all, r.mine))}
+            {open && visible.map((r) => row(r, r.all, r.mine))}
           </tfoot>
         </table>
       </div>
-      <div className="panel-foot">Spending in {rateCtx.home}: card spends as charged, cash at the trip or default rate. Repayments aren’t spending and show in the currency paid. Tap a row to see its entries.</div>
+      {(open || compact) && (
+        <div className="panel-foot row between">
+          {open && <span>Spending in {rateCtx.home}: card spends as charged, cash at the trip or default rate. Repayments aren’t spending and show in the currency paid. Tap a row to see its entries.</span>}
+          {compact && <button className="ghost small" onClick={toggle} aria-expanded={open} data-testid="category-toggle">{open ? <ChevronUp /> : <ChevronDown />}{open ? 'Hide breakdown' : 'Show breakdown'}</button>}
+        </div>
+      )}
     </div>
   );
 }
