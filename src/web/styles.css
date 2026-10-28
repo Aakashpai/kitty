@@ -446,5 +446,15 @@ details[open] summary::before { transform: rotate(90deg); }
   th, td { padding: 8px 6px; }
   th { white-space: normal; }
   td .money-list { flex-direction: column; align-items: flex-end; gap: 0; }
-  .actions { white-space: normal; }
+  /* Wide tables (4+ columns, or rows with buttons) stack: first cell on its own line, then labelled values. */
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) :is(tbody, tfoot) { display: block; }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) thead { display: none; }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) tr { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 6px 14px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) td:first-child { flex-basis: 100%; }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) td:empty { display: none; }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) td .money-list { align-items: flex-start; }
+  .table-wrap table:is(:has(thead th:nth-child(4)), :has(td.actions)) td:not([data-label=''])[data-label]::before { content: attr(data-label); display: block; font: 500 10.5px/1.4 var(--font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
 }
+td .who { flex-wrap: wrap; white-space: normal; }
+.actions { white-space: normal; }

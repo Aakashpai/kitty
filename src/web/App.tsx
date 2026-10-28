@@ -158,8 +158,26 @@ function Shell() {
   );
 }
 
+/** Copies each column header onto its cells as data-label, so the phone CSS can stack wide tables and still name every value. */
+function labelTables() {
+  for (const t of document.querySelectorAll('table')) {
+    const heads = [...t.querySelectorAll('thead th')].map((th) => th.textContent ?? '');
+    for (const tr of t.querySelectorAll('tbody tr, tfoot tr')) {
+      [...tr.children].forEach((td, i) => { const l = heads[i] ?? ''; if (td.getAttribute('data-label') !== l) td.setAttribute('data-label', l); });
+    }
+  }
+}
+
 export function App() {
   const { section, parts } = useRoute();
+  useEffect(() => {
+    let raf = 0;
+    const run = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(labelTables); };
+    const mo = new MutationObserver(run);
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    run();
+    return () => { mo.disconnect(); cancelAnimationFrame(raf); };
+  }, []);
   if (section === 'invite' && parts[1]) return <ErrorBoundary><InviteAccept token={parts[1]} /></ErrorBoundary>;
   if (section === 's' && parts[1]) return <ErrorBoundary><SharedPage token={parts[1]} simple={parts[2] === 'simple'} /></ErrorBoundary>;
   return (
