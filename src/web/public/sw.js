@@ -27,3 +27,17 @@ self.addEventListener('fetch', (e) => {
   // Hashed build files and icons never change under the same name: cache first.
   e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then(keep(req))));
 });
+
+// Phone notifications: show what the server sent, and open (or focus) Kitty on that trip when tapped.
+self.addEventListener('push', (e) => {
+  const d = e.data ? e.data.json() : {};
+  e.waitUntil(self.registration.showNotification(d.title || 'Kitty', { body: d.body || '', icon: '/icon-192.png', badge: '/icon-192.png', tag: d.tag, data: { url: d.url || '/' } }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || '/', self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+    const win = wins.find((w) => w.url.startsWith(self.location.origin));
+    return win ? win.navigate(url).then((w) => (w || win).focus()) : self.clients.openWindow(url);
+  }));
+});

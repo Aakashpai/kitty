@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  allocate, computeBalances, decimalsOf, emptyTx, formatAmount, pairwiseDebts, parseAmount, refundedTotal, toMajor, validateTx,
+  allocate, computeBalances, decimalsOf, emptyTx, formatAmount, pairwiseDebts, parseAmount, refundedTotal, splitByItems, toMajor, validateTx,
   TX_TYPES, type Account, type Id, type Split, type SplitMethod, type Tx, type TxInput, type TxType,
 } from '../../engine/index.ts';
 import { ApiError, api, enqueue, errorText } from '../api.ts';
 import { CATEGORIES, COMMON_CURRENCIES, categoryOf, guessCategory, today, useLedger } from '../store.tsx';
-import { X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { CategoryGlyph, ErrorBox, Field, Money, TYPE_LABEL, TypeIcon } from './ui.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { againPrefill } from './TxDetail.tsx';
@@ -85,6 +85,11 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
     pickCategory(CATEGORIES.find((c) => c.toLowerCase() === v.toLowerCase()) ?? (v || null));
   };
   const setText = (k: keyof Texts, v: string) => setTexts((t) => ({ ...t, [k]: v }));
+  // Itemised bill: what was ordered and who had it. Saved as exact shares plus the items, so it can be edited later.
+  const [byItem, setByItem] = useState(() => !!tx.items?.length);
+  const [itemRows, setItemRows] = useState<{ name: string; price: string; people: Id[] }[]>(() =>
+    tx.items?.length ? tx.items.map((it) => ({ name: it.name, price: toMajor(it.amount, tx.currency), people: it.people })) : [{ name: '', price: '', people: [] }]);
+  const setItem = (i: number, p: Partial<(typeof itemRows)[number]>) => setItemRows((rows) => rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
   const isSplit = tx.type === 'expense' || tx.type === 'refund';
   const isMove = tx.type === 'transfer' || tx.type === 'withdrawal';
   const activePeople = state.people.filter((p) => !p.archived || participants.includes(p.id));
@@ -139,7 +144,20 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
     const settled_currency = tx.type === 'repayment' && crossSettle ? (tx.settled_currency ?? '') : null;
     const settled_amount = settled_currency && settled_currency !== tx.currency ? num(texts.settled_amount, settled_currency, `Settled ${settled_currency}`) : null;
     let splits: Split[] = [];
-    if (isSplit && participants.length) {
+    let items: TxInput['items'] = null;
+    if (isSplit && byItem) {
+      items = itemRows.filter((r) => r.name.trim() || r.price.trim()).map((r, i) => {
+        const name = r.name.trim() || `Item ${i + 1}`;
+        return { name, amount: num(r.price, tx.currency, `${name} price`) ?? 0, people: r.people };
+      });
+      if (!items.length) errs.push('Add at least one item');
+      else if (items.some((it) => it.amount <= 0 || !it.people.length)) errs.push('Each item needs a price and at least one person');
+      else {
+        const shares = splitByItems(amount, items);
+        if (!shares) errs.push(`Items add up to ${formatAmount(items.reduce((s, it) => s + it.amount, 0), tx.currency)}, more than the total`);
+        else splits = shares.map((s) => ({ ...s, input: null }));
+      }
+    } else if (isSplit && participants.length) {
       const method = tx.split_method ?? 'equal';
       if (method === 'equal') splits = allocate(amount, participants.map(() => 1)).map((a, i) => ({ person_id: participants[i]!, amount: a, input: null }));
       else if (method === 'amount') splits = participants.map((p) => ({ person_id: p, amount: num(splitInputs[p] ?? '', tx.currency, `${who(p)}'s share`) ?? 0, input: null }));
@@ -154,9 +172,10 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
         }
       }
     }
-    const out: TxInput = { ...tx, amount, from_amount, to_amount, fee_amount, settled_currency: settled_currency || null, settled_amount, splits, split_method: isSplit ? (tx.split_method ?? 'equal') : null };
+    const out: TxInput = { ...tx, amount, from_amount, to_amount, fee_amount, settled_currency: settled_currency || null, settled_amount, splits, items, split_method: isSplit ? (byItem ? 'amount' : (tx.split_method ?? 'equal')) : null };
     return { tx: out, errs };
-  }, [tx, texts, participants, splitInputs, crossSettle, fromAcct, toAcct, isMove, isSplit, who]);
+  }, [tx, texts, participants, splitInputs, crossSettle, fromAcct, toAcct, isMove, isSplit, who, byItem, itemRows]);
+  const itemsSum = (built.tx.items ?? []).reduce((s, it) => s + it.amount, 0);
 
   const errors = [...built.errs, ...validateTx(built.tx, state)];
   const canPreview = built.errs.length === 0 && built.tx.amount > 0;
@@ -268,7 +287,7 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
             <div className="chips" data-testid="recent">
               <span className="faint small">Again:</span>
               {recent.map((t) => (
-                <button type="button" key={t.id} className="chip" onClick={() => openForm({ initial: againPrefill(t) })} title={`${t.description} · ${formatAmount(t.amount, t.currency)}`} data-testid={`again-${t.id}`}>
+                <button type="button" key={t.id} className="chip" onClick={() => openForm({ initial: { ...againPrefill(t), ...(t.trip_id != null && trips.get(t.trip_id)?.closed ? { trip_id: null } : {}) } })} title={`${t.description} · ${formatAmount(t.amount, t.currency)}`} data-testid={`again-${t.id}`}>
                   <CategoryGlyph category={t.type === 'expense' ? t.category : 'Expenses'} />{t.description}
                 </button>
               ))}
@@ -309,7 +328,7 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
               <Field label="Trip" hint={tx.type === 'repayment' ? 'Tag it to count against that trip’s balance' : undefined}>
                 <select value={tx.trip_id ?? ''} disabled={!!linkedOrig} onChange={(e) => setTrip(e.target.value ? Number(e.target.value) : null)} data-testid="trip">
                   <option value="">No trip (personal)</option>
-                  {state.trips.filter((t) => !t.archived || t.id === tx.trip_id).map((t) => (
+                  {state.trips.filter((t) => (!t.archived && !t.closed) || t.id === tx.trip_id).map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
@@ -430,13 +449,49 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
                 <div className="row">
                   {(Object.keys(SPLIT_LABEL) as SplitMethod[]).map((m) => (
                     <label key={m} className="check small">
-                      <input type="radio" name="split-method" checked={(tx.split_method ?? 'equal') === m} onChange={() => patch({ split_method: m })} data-testid={`split-${m}`} />
+                      <input type="radio" name="split-method" checked={!byItem && (tx.split_method ?? 'equal') === m} onChange={() => { setByItem(false); patch({ split_method: m }); }} data-testid={`split-${m}`} />
                       {SPLIT_LABEL[m]}
                     </label>
                   ))}
+                  {tx.type === 'expense' && (
+                    <label className="check small">
+                      <input type="radio" name="split-method" checked={byItem} onChange={() => { setByItem(true); setItemRows((rows) => (rows.length === 1 && !rows[0]!.name && !rows[0]!.price ? [{ name: '', price: '', people: participants }] : rows)); }} data-testid="split-items" />
+                      By item
+                    </label>
+                  )}
                 </div>
               </div>
-              <div className="chips">
+              {byItem && (
+                <div className="stack tight" data-testid="items-editor">
+                  {itemRows.map((r, i) => (
+                    <div key={i} className="item-row">
+                      <div className="row">
+                        <input className="item-name" value={r.name} placeholder={`Item ${i + 1}`} maxLength={60} onChange={(e) => setItem(i, { name: e.target.value })} aria-label="Item" data-testid={`item-name-${i}`} />
+                        <input className="item-price" inputMode="decimal" value={r.price} placeholder="0.00" onChange={(e) => setItem(i, { price: e.target.value })} aria-label="Price" data-testid={`item-price-${i}`} />
+                        <button type="button" className="ghost icon small" aria-label="Remove item" disabled={itemRows.length === 1} onClick={() => setItemRows((rows) => rows.filter((_, j) => j !== i))}><X /></button>
+                      </div>
+                      <div className="chips">
+                        {activePeople.map((p) => (
+                          <button type="button" key={p.id} className={`chip ${r.people.includes(p.id) ? 'on' : ''}`} onClick={() => setItem(i, { people: r.people.includes(p.id) ? r.people.filter((x) => x !== p.id) : [...r.people, p.id] })} data-testid={`item-${i}-person-${p.id}`}>{p.is_me ? 'You' : p.name}</button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="row between">
+                    <button type="button" className="small" onClick={() => setItemRows((rows) => [...rows, { name: '', price: '', people: participants }])} data-testid="add-item"><Plus />Add item</button>
+                    {built.tx.amount > 0 && itemsSum > 0 && itemsSum <= built.tx.amount && <span className="faint small">Items {formatAmount(itemsSum, tx.currency)} · tax, service & tip {formatAmount(built.tx.amount - itemsSum, tx.currency)} shared by what each had</span>}
+                  </div>
+                  {built.tx.splits.length > 0 && (
+                    <div className="table-wrap panel">
+                      <table>
+                        <thead><tr><th>Person</th><th className="num">Share</th></tr></thead>
+                        <tbody>{built.tx.splits.map((s) => <tr key={s.person_id}><td>{who(s.person_id)}</td><td className="num"><Money amount={s.amount} currency={tx.currency} /></td></tr>)}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!byItem && <div className="chips">
                 {activePeople.map((p) => (
                   <button type="button" key={p.id} className={`chip ${participants.includes(p.id) ? 'on' : ''}`} onClick={() => toggleParticipant(p.id)} data-testid={`participant-${p.id}`}>
                     {p.is_me ? 'You' : p.name}
@@ -447,8 +502,8 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
                     everyone on the trip
                   </button>
                 )}
-              </div>
-              {participants.length > 0 && (
+              </div>}
+              {!byItem && participants.length > 0 && (
                 <div className="table-wrap panel">
                   <table>
                     <thead>

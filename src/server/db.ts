@@ -1,7 +1,7 @@
 import { createClient, LibsqlError, type Client, type InValue } from '@libsql/client';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { formatAmount, validateTx, type Account, type Activity, type Id, type Invite, type LedgerState, type Person, type Reconciliation, type Recurring, type Share, type Trip, type TripBudget, type Tx, type TxInput, type UserPublic } from '../engine/index.ts';
+import { formatAmount, validateTx, type Account, type Activity, type Comment, type Id, type Invite, type LedgerState, type Person, type Reconciliation, type Recurring, type Share, type Trip, type TripBudget, type Tx, type TxInput, type UserPublic } from '../engine/index.ts';
 
 // Each entry runs once, in order; schema_migrations remembers which have been applied.
 const MIGRATIONS: string[] = [
@@ -176,6 +176,26 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+  `
+  ALTER TABLE trips ADD COLUMN closed INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE transactions ADD COLUMN items TEXT;
+  CREATE TABLE comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tx_id INTEGER NOT NULL,
+    person_id INTEGER,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX idx_comments_tx ON comments(tx_id);
+  CREATE TABLE push_subs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
 ];
 
 const parseBudget = (v: unknown): TripBudget | null => {
@@ -223,10 +243,16 @@ interface UserRow extends UserPublic { password_hash: string }
 const TX_COLS = [
   'type', 'date', 'description', 'notes', 'category', 'trip_id', 'currency', 'amount', 'payer_id', 'payee_id',
   'from_account_id', 'from_amount', 'to_account_id', 'to_amount', 'fee_amount', 'settled_amount', 'settled_currency',
-  'linked_tx_id', 'method', 'reference', 'split_method', 'full_settlement',
+  'linked_tx_id', 'method', 'reference', 'split_method', 'full_settlement', 'items',
 ] as const;
+/** Itemised bills are stored as JSON text; everything else is a plain column. */
+const parseItems = (tx: Tx) => {
+  tx.items = typeof tx.items === 'string' ? (JSON.parse(tx.items) as Tx['items']) : null;
+  return tx;
+};
 // Receipt photos stay out of the JSON backup: a few of them would pass the 4.5 MB response limit on Vercel.
-const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring'] as const;
+// Phone subscriptions stay out too: they belong to devices, not to the ledger.
+const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring', 'comments'] as const;
 const USER_COLS = 'id, email, name, role, person_id, created_at, seen_at';
 const INSERT_TX = `INSERT INTO transactions (${TX_COLS.join(', ')}, added_by, recurring_id, client_ref) VALUES (${TX_COLS.map(() => '?').join(', ')}, ?, ?, ?) RETURNING id`;
 
@@ -306,13 +332,13 @@ export async function openDb(url: string, authToken?: string) {
     const row = await t.get<Tx>('SELECT * FROM transactions WHERE id = ?', [id]);
     if (!row) throw new HttpError(404, 'Transaction not found');
     row.splits = await t.all<Tx['splits'][number]>('SELECT person_id, amount, input FROM splits WHERE tx_id = ? ORDER BY person_id', [id]);
-    return row;
+    return parseItems(row);
   };
   const writeSplits = async (t: Q, id: Id, splits: TxInput['splits']) => {
     await t.run('DELETE FROM splits WHERE tx_id = ?', [id]);
     for (const s of splits) await t.run('INSERT INTO splits (tx_id, person_id, amount, input) VALUES (?, ?, ?, ?)', [id, s.person_id, s.amount, s.input]);
   };
-  const txParams = (tx: TxInput): Val[] => TX_COLS.map((c) => (tx[c] ?? null) as Val);
+  const txParams = (tx: TxInput): Val[] => TX_COLS.map((c) => (c === 'items' ? (tx.items?.length ? JSON.stringify(tx.items) : null) : ((tx[c] ?? null) as Val)));
   const personInUse = async (t: Q, id: Id) =>
     !!(await t.get('SELECT 1 FROM transactions WHERE payer_id = ? OR payee_id = ? LIMIT 1', [id, id])) ||
     !!(await t.get('SELECT 1 FROM splits WHERE person_id = ? LIMIT 1', [id])) ||
@@ -329,7 +355,7 @@ export async function openDb(url: string, authToken?: string) {
     loadState: async (user: UserPublic | null, materialize = false): Promise<LedgerState> => {
       const owner = user?.role === 'owner';
       const stmts = [
-        { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates, budget FROM trips ORDER BY start_date DESC, id DESC' },
+        { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates, budget, closed FROM trips ORDER BY start_date DESC, id DESC' },
         { sql: 'SELECT trip_id, person_id FROM trip_members ORDER BY person_id' },
         { sql: 'SELECT * FROM transactions ORDER BY date DESC, id DESC' },
         { sql: 'SELECT tx_id, person_id, amount, input FROM splits ORDER BY person_id' },
@@ -341,6 +367,7 @@ export async function openDb(url: string, authToken?: string) {
         { sql: 'SELECT * FROM shares WHERE revoked = 0 ORDER BY id DESC' },
         { sql: 'SELECT id, every, next_date, template, created_by FROM recurring WHERE active = 1 ORDER BY next_date, id' },
         { sql: 'SELECT id, tx_id FROM receipts ORDER BY id' },
+        { sql: 'SELECT id, tx_id, person_id, body, created_at FROM comments ORDER BY id' },
         ...(owner ? [{ sql: `SELECT ${USER_COLS} FROM users ORDER BY id` }, { sql: "SELECT * FROM invites WHERE used_at IS NULL AND expires_at > datetime('now') ORDER BY id DESC" }] : []),
       ];
       let rs;
@@ -370,7 +397,7 @@ export async function openDb(url: string, authToken?: string) {
         if (!list) byTx.set(sp.tx_id, (list = []));
         list.push({ person_id: sp.person_id, amount: sp.amount, input: sp.input });
       }
-      for (const tx of transactions) tx.splits = byTx.get(tx.id) ?? [];
+      for (const tx of transactions) parseItems(tx).splits = byTx.get(tx.id) ?? [];
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const state: LedgerState = {
@@ -384,11 +411,12 @@ export async function openDb(url: string, authToken?: string) {
         shares: rows<Share>(9),
         recurring,
         receipts: rows<{ id: Id; tx_id: Id }>(11),
+        comments: rows<Comment>(12),
         user,
       };
       if (owner) {
-        state.users = rows<UserPublic>(12);
-        state.invites = rows<Invite>(13);
+        state.users = rows<UserPublic>(13);
+        state.invites = rows<Invite>(14);
       }
       return user && !owner ? memberSlice(state, user.person_id, user.id) : state;
     },
@@ -431,7 +459,7 @@ export async function openDb(url: string, authToken?: string) {
         list.push({ person_id: sp.person_id, amount: sp.amount, input: sp.input });
       }
       for (const tx of transactions) {
-        tx.splits = byTx.get(tx.id) ?? [];
+        parseItems(tx).splits = byTx.get(tx.id) ?? [];
         tx.reference = tx.notes = null;
       }
       const people = rows<Person>(5);
@@ -499,16 +527,18 @@ export async function openDb(url: string, authToken?: string) {
     }),
 
     createTrip: (tr: Omit<Trip, 'id'>) => inTx(async (t) => {
-      const row = (await t.get<{ id: number }>('INSERT INTO trips (name, start_date, end_date, currency, notes, archived, rates, budget) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, tr.budget ? JSON.stringify(tr.budget) : null]))!;
+      const row = (await t.get<{ id: number }>('INSERT INTO trips (name, start_date, end_date, currency, notes, archived, rates, budget, closed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, tr.budget ? JSON.stringify(tr.budget) : null, tr.closed ?? 0]))!;
       for (const m of tr.members) await t.run('INSERT INTO trip_members (trip_id, person_id) VALUES (?, ?)', [row.id, m]);
       await logIn(t, 'create', 'trip', row.id, `Created trip ${tr.name}`);
       return { ...tr, id: row.id };
     }),
     updateTrip: (id: Id, tr: Omit<Trip, 'id'>) => inTx(async (t) => {
-      if (!(await t.run('UPDATE trips SET name = ?, start_date = ?, end_date = ?, currency = ?, notes = ?, archived = ?, rates = ?, budget = ? WHERE id = ?', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, tr.budget ? JSON.stringify(tr.budget) : null, id])).changes) throw new HttpError(404, 'Trip not found');
+      const was = await t.get<{ closed: number }>('SELECT closed FROM trips WHERE id = ?', [id]);
+      if (!was) throw new HttpError(404, 'Trip not found');
+      await t.run('UPDATE trips SET name = ?, start_date = ?, end_date = ?, currency = ?, notes = ?, archived = ?, rates = ?, budget = ?, closed = ? WHERE id = ?', [tr.name, tr.start_date, tr.end_date, tr.currency, tr.notes, tr.archived, tr.rates ? JSON.stringify(tr.rates) : null, tr.budget ? JSON.stringify(tr.budget) : null, tr.closed ?? 0, id]);
       await t.run('DELETE FROM trip_members WHERE trip_id = ?', [id]);
       for (const m of tr.members) await t.run('INSERT INTO trip_members (trip_id, person_id) VALUES (?, ?)', [id, m]);
-      await logIn(t, 'update', 'trip', id, `Updated trip ${tr.name}`);
+      await logIn(t, 'update', 'trip', id, !!was.closed !== !!tr.closed ? `${tr.closed ? 'Closed' : 'Reopened'} trip ${tr.name}` : `Updated trip ${tr.name}`);
     }),
     deleteTrip: (id: Id) => inTx(async (t) => {
       const tr = await t.get<Trip>('SELECT * FROM trips WHERE id = ?', [id]);
@@ -550,6 +580,7 @@ export async function openDb(url: string, authToken?: string) {
       if (await t.get('SELECT 1 FROM transactions WHERE linked_tx_id = ? LIMIT 1', [id])) throw new HttpError(409, 'This expense has refunds linked to it. Delete or unlink the refunds first.');
       await t.run('DELETE FROM splits WHERE tx_id = ?', [id]);
       await t.run('DELETE FROM receipts WHERE tx_id = ?', [id]);
+      await t.run('DELETE FROM comments WHERE tx_id = ?', [id]);
       await t.run('DELETE FROM transactions WHERE id = ?', [id]);
       await logIn(t, 'delete', 'transaction', id, `Deleted ${tx.type}: ${txLabel(tx)}`, tx);
     }),
@@ -563,7 +594,7 @@ export async function openDb(url: string, authToken?: string) {
       const ctx = await api.loadState(null);
       for (const r of ctx.recurring ?? []) {
         if (r.next_date > today) continue;
-        if (validateTx(r.template, ctx).length) {
+        if (validateTx(r.template, ctx).length || ctx.trips.some((t) => t.id === r.template.trip_id && t.closed)) {
           await read((t) => t.run('UPDATE recurring SET active = 0 WHERE id = ?', [r.id]));
           continue;
         }
@@ -602,6 +633,31 @@ export async function openDb(url: string, authToken?: string) {
       await t.run('DELETE FROM receipts WHERE id = ?', [id]);
       await logIn(t, 'update', 'transaction', r.tx_id, 'Removed a receipt photo');
     }),
+    /** The trip's name when it is closed (its entries are locked), else undefined. */
+    closedTrip: (tripId: Id | null | undefined) => (tripId == null ? Promise.resolve(undefined) : read(async (t) => (await t.get<{ name: string }>('SELECT name FROM trips WHERE id = ? AND closed = 1', [tripId]))?.name)),
+
+    addComment: (txId: Id, personId: Id | null, body: string) => inTx(async (t) => {
+      if (!(await t.get('SELECT 1 FROM transactions WHERE id = ?', [txId]))) throw new HttpError(404, 'Transaction not found');
+      return (await t.get<Comment>('INSERT INTO comments (tx_id, person_id, body) VALUES (?, ?, ?) RETURNING id, tx_id, person_id, body, created_at', [txId, personId, body]))!;
+    }),
+    deleteComment: (id: Id) => inTx(async (t) => {
+      if (!(await t.run('DELETE FROM comments WHERE id = ?', [id])).changes) throw new HttpError(404, 'Comment not found');
+    }),
+
+    /** Settings that must be made once and never replaced (push keys): the first writer wins, everyone reads that. */
+    initSetting: async (key: string, value: string) => {
+      await read((t) => t.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]));
+      return (await api.getSetting(key))!;
+    },
+    savePushSub: (userId: Id, s: { endpoint: string; p256dh: string; auth: string }) =>
+      read((t) => t.run('INSERT INTO push_subs (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth', [userId, s.endpoint, s.p256dh, s.auth])),
+    removePushSub: (endpoint: string) => read((t) => t.run('DELETE FROM push_subs WHERE endpoint = ?', [endpoint])),
+    /** Every device that asked for notifications, with whose it is. One small query; empty means nothing to send. */
+    pushTargets: () => read((t) => t.all<{ user_id: Id; role: UserPublic['role']; person_id: Id | null; email: string; endpoint: string; p256dh: string; auth: string }>('SELECT s.user_id, u.role, u.person_id, u.email, s.endpoint, s.p256dh, s.auth FROM push_subs s JOIN users u ON u.id = s.user_id')),
+    names: () => read(async (t) => ({
+      people: new Map((await t.all<{ id: Id; name: string }>('SELECT id, name FROM people')).map((p) => [p.id, p.name])),
+      trips: new Map((await t.all<{ id: Id; name: string }>('SELECT id, name FROM trips')).map((p) => [p.id, p.name])),
+    })),
     markSeen: (userId: Id) => read((t) => t.run("UPDATE users SET seen_at = datetime('now') WHERE id = ?", [userId])),
 
     createReconciliation: (r: Omit<Reconciliation, 'id' | 'created_at'>) => inTx(async (t) => {
@@ -642,6 +698,7 @@ export async function openDb(url: string, authToken?: string) {
       if (u.role === 'owner') throw new HttpError(400, 'The owner account cannot be removed');
       await t.run('UPDATE shares SET created_by = NULL WHERE created_by = ?', [id]);
       await t.run('DELETE FROM invites WHERE created_by = ?', [id]);
+      await t.run('DELETE FROM push_subs WHERE user_id = ?', [id]);
       await t.run('DELETE FROM users WHERE id = ?', [id]);
       await logIn(t, 'delete', 'user', id, `Removed access for ${u.name} (${u.email})`);
     }),
@@ -736,5 +793,6 @@ function memberSlice(s: LedgerState, pid: Id | null, uid: Id): LedgerState {
     shares: s.shares.filter((x) => x.created_by === uid),
     recurring: s.recurring?.filter((r) => (r.template.trip_id != null && tripIds.has(r.template.trip_id)) || involves(r.template, pid)),
     receipts: s.receipts?.filter((r) => txIds.has(r.tx_id)),
+    comments: s.comments?.filter((x) => txIds.has(x.tx_id)),
   };
 }

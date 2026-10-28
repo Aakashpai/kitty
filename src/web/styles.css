@@ -211,6 +211,18 @@ tr.clickable.on td { background: var(--surface-2); }
 .chips[data-testid='recent'] .chip { max-width: 100%; min-width: 0; }
 .chips[data-testid='recent'] .chip { overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 26px; }
 .txrow .clip { width: 11px; height: 11px; vertical-align: -1px; margin-right: 4px; }
+.item-row { display: flex; flex-direction: column; gap: 6px; padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); }
+.item-row .row { flex-wrap: nowrap; }
+.item-row .item-name { flex: 1; min-width: 0; }
+.item-row .item-price { width: 110px; flex: none; }
+.comment { display: flex; gap: var(--space-2); align-items: flex-start; }
+.comment .body { min-width: 0; flex: 1; }
+.comment .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment .link { margin-left: var(--space-2); }
+.comment-form { flex-wrap: nowrap; }
+.comment-form input { flex: 1; min-width: 0; }
+.txrow .talk { margin-right: 4px; }
+.trip-card .lock, .badge .lock { width: 12px; height: 12px; color: var(--text-3); }
 .receipts { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .receipt { position: relative; }
 .receipt img { width: 88px; height: 88px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); display: block; background: var(--surface-2); }
@@ -373,6 +385,14 @@ details[open] summary::before { transform: rotate(90deg); }
 @media (hover: hover) and (pointer: fine) { .bars .col:hover .bar { opacity: 1; } .bars .col:hover .val { opacity: 1; } }
 .bars-labels { display: flex; gap: 10px; margin-top: 6px; }
 .bars-labels span { flex: 1; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.bars.days, .bars-labels.days { gap: 4px; }
+.bars.days { position: relative; }
+.bars.days .col { background: transparent; border: 0; padding: 0; height: 100%; border-radius: 0; cursor: pointer; }
+.bars.days .col:active { transform: none; }
+.bars.days .col.over .bar { background: var(--neg); opacity: 0.75; }
+.bars.days .col.cur .bar { opacity: 1; }
+.bars .pace { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--warn); pointer-events: none; z-index: 1; }
+.bars-labels.days span { min-width: 0; overflow: hidden; }
 
 /* ---------- narrow screens ---------- */
 @media (max-width: 480px) {

@@ -1,6 +1,6 @@
 import { shareOf, type Tx } from '../../engine/index.ts';
 import { useLedger, type Ledger } from '../store.tsx';
-import { Paperclip } from 'lucide-react';
+import { MessageCircle, Paperclip } from 'lucide-react';
 import { Empty, Money, TYPE_LABEL, TypeIcon, fmtShort } from './ui.tsx';
 
 export function txWho(tx: Tx, l: Ledger): string {
@@ -49,6 +49,8 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
   const l = useLedger();
   if (!txs.length) return <Empty title="Nothing here yet">Transactions you record will show up in this list.</Empty>;
   const withReceipt = new Set(l.state.receipts?.map((r) => r.tx_id));
+  const talk = new Map<number, number>();
+  for (const c of l.state.comments ?? []) talk.set(c.tx_id, (talk.get(c.tx_id) ?? 0) + 1);
   return (
     <div className="txlist" data-testid="tx-list">
       {txs.map((tx) => {
@@ -61,7 +63,7 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
             <TypeIcon type={tx.type} category={tx.category} />
             <span className="body">
               <span className="title">{tx.description || TYPE_LABEL[tx.type]}</span>
-              <span className="meta">{withReceipt.has(tx.id) && <Paperclip className="clip" aria-label="Has a receipt photo" />}{meta}</span>
+              <span className="meta">{withReceipt.has(tx.id) && <Paperclip className="clip" aria-label="Has a receipt photo" />}{talk.has(tx.id) && <span className="talk" aria-label={`${talk.get(tx.id)} comments`}><MessageCircle className="clip" />{talk.get(tx.id)} </span>}{meta}</span>
             </span>
             <span className="amt">
               <span className="amount"><Money amount={tx.amount} currency={tx.currency} /></span>

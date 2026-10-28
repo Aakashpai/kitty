@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Camera, CopyPlus, Pencil, Repeat, Trash2, Undo2, X } from 'lucide-react';
+import { Camera, CopyPlus, Lock, Pencil, Repeat, Send, Trash2, Undo2, X } from 'lucide-react';
 import { formatAmount, refundedTotal, toMajor, type Tx, type TxInput } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { today, useLedger } from '../store.tsx';
@@ -54,6 +54,8 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
   const original = tx.linked_tx_id != null ? state.transactions.find((t) => t.id === tx.linked_tx_id) : null;
   const history = state.activity.filter((a) => a.entity === 'transaction' && a.entity_id === tx.id);
   const receipts = (state.receipts ?? []).filter((r) => r.tx_id === tx.id);
+  const comments = (state.comments ?? []).filter((c) => c.tx_id === tx.id);
+  const [note, setNote] = useState('');
   const rule = tx.recurring_id != null ? state.recurring?.find((r) => r.id === tx.recurring_id) : undefined;
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, run] = useBusy();
@@ -131,6 +133,13 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
             </div>
           </div>
         )}
+        {tx.items?.length ? (
+          <div className="info-box small" data-testid="tx-items">
+            <strong>Items</strong>
+            <ul>{tx.items.map((it, i) => <li key={i}>{it.name} · {formatAmount(it.amount, tx.currency)} · {it.people.map((p) => who(p)).join(', ')}</li>)}</ul>
+            {tx.amount > tx.items.reduce((s, it) => s + it.amount, 0) && <div className="muted">Tax, service & tip {formatAmount(tx.amount - tx.items.reduce((s, it) => s + it.amount, 0), tx.currency)} shared by what each had</div>}
+          </div>
+        ) : null}
         <EffectsView tx={tx} />
         {tx.type === 'expense' && refunds.length > 0 && (
           <div className="info-box">
@@ -160,6 +169,26 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
             )}
           </div>
         )}
+        {!readOnly && (
+          <div className="stack tight" data-testid="comments">
+            <strong className="small">Comments</strong>
+            {comments.map((c) => (
+              <div key={c.id} className="comment">
+                <Avatar id={c.person_id ?? 0} name={people.get(c.person_id ?? -1)?.name ?? '?'} small />
+                <div className="body">
+                  <div className="small"><strong>{who(c.person_id)}</strong> <span className="faint">{fmtWhen(c.created_at)}</span>
+                    {(l.owner || c.person_id === l.me.id) && <button className="link small" disabled={busy} onClick={() => { if (window.confirm('Delete this comment?')) void act(() => api('DELETE', `/api/comments/${c.id}`)); }}>Delete</button>}
+                  </div>
+                  <div className="text">{c.body}</div>
+                </div>
+              </div>
+            ))}
+            <form className="row comment-form" onSubmit={(e) => { e.preventDefault(); const body = note.trim(); if (body) void act(async () => { await api('POST', `/api/transactions/${tx.id}/comments`, { body }); setNote(''); }); }}>
+              <input value={note} maxLength={1000} placeholder={comments.length ? 'Reply…' : 'Ask or explain something about this entry'} onChange={(e) => setNote(e.target.value)} data-testid="comment-input" />
+              <button type="submit" disabled={busy || !note.trim()} data-testid="comment-send"><Send />Send</button>
+            </form>
+          </div>
+        )}
         {!readOnly && history.length > 0 && (
           <details>
             <summary>History ({history.length})</summary>
@@ -168,7 +197,8 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
             </ul>
           </details>
         )}
-        {!readOnly && <div className="row between">
+        {!readOnly && trip?.closed ? <div className="faint small row" data-testid="tx-locked"><Lock />{trip.name} is closed, so this entry is locked.</div> : null}
+        {!readOnly && !trip?.closed && <div className="row between">
           <div className="row">
             <button onClick={() => openForm({ existing: tx, onSaved: onClose })} data-testid="edit-tx"><Pencil />Edit</button>
             {tx.type !== 'refund' && <button onClick={() => openForm({ initial: againPrefill(tx) })} data-testid="again-tx"><CopyPlus />Add again</button>}

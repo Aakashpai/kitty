@@ -12,7 +12,8 @@ const readMode = (): Mode => {
 
 /** Who owes whom (exact, per currency), each person's net, and a minimal settlement plan; optionally everything valued in the home currency. */
 export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) {
-  const { who, me, people, readOnly, rateCtx } = useLedger();
+  const { who, me, people, readOnly: viewOnly, rateCtx, trips } = useLedger();
+  const readOnly = viewOnly || !!(tripId != null && trips.get(tripId)?.closed); // a closed trip takes no new repayments
   const openForm = useTxForm();
   const [mode, setModeState] = useState<Mode>(readMode);
   const setMode = (m: Mode) => { setModeState(m); try { localStorage.setItem('balances-mode', m); } catch { /* ignore */ } };

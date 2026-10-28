@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Banknote, ChevronLeft, Copy, Link2, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Banknote, ChevronLeft, Copy, Link2, Lock, LockOpen, Pencil, Plus, Trash2 } from 'lucide-react';
 import { computeBalances, formatAmount, homeSpendingBy, parseAmount, shareOf, spendingBy, toMajor, type Id, type Person, type Share, type Trip, type TripBudget, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { CATEGORIES, COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
@@ -113,7 +113,7 @@ function TripCard({ trip }: { trip: Trip }) {
   return (
     <a className="panel trip-card" href={`#/trips/${trip.id}`} style={hueStyle(trip.id)} data-testid={`trip-card-${trip.id}`}>
       <div className="row between">
-        <span className="name"><TripMark name={trip.name}><i /></TripMark>{trip.name}</span>
+        <span className="name"><TripMark name={trip.name}><i /></TripMark>{trip.name}{trip.closed ? <Lock className="lock" aria-label="Closed" /> : null}</span>
         <span className="badge">{trip.currency}</span>
       </div>
       <div className="row between">
@@ -196,10 +196,54 @@ export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Pe
   );
 }
 
+const nextDay = (d: string) => new Date(Date.parse(d) + 86_400_000).toISOString().slice(0, 10);
+
+/** The group's spending per day in the home currency, against the budget's daily pace when the trip has one. Tap a day for its entries. */
+function TripDays({ trip, txs, onOpen }: { trip: Trip; txs: Tx[]; onOpen: (tx: Tx) => void }) {
+  const { rateCtx } = useLedger();
+  const [day, setDay] = useState<string | null>(null);
+  const home = rateCtx.home;
+  const perDay = homeSpendingBy(txs, rateCtx, (t) => t.date);
+  const days = new Set(perDay.keys());
+  let span = 0;
+  if (trip.start_date && trip.end_date) for (let d = trip.start_date; d <= trip.end_date && span < 366; d = nextDay(d), span++) days.add(d);
+  const list = [...days].sort().map((d) => ({ d, v: perDay.get(d)?.get(home) ?? 0 }));
+  const pace = trip.budget?.total != null && span ? Math.round(trip.budget.total / span) : null;
+  const max = Math.max(...list.map((x) => x.v), pace ?? 0, 1);
+  const spent = list.reduce((s, x) => s + x.v, 0);
+  const unconverted = [...perDay.values()].some((m) => [...m.keys()].some((c) => c !== home));
+  const today = new Date().toISOString().slice(0, 10);
+  const during = !!(trip.start_date && trip.end_date && trip.start_date <= today && today <= trip.end_date);
+  const dayN = during ? Math.round((Date.parse(today) - Date.parse(trip.start_date!)) / 86_400_000) + 1 : 0;
+  const soFar = list.filter((x) => x.d <= today).reduce((s, x) => s + x.v, 0);
+  const summary = during && pace != null
+    ? `Day ${dayN} of ${span}: ${formatAmount(soFar, home)} spent, ${formatAmount(pace * dayN, home)} planned by now (${soFar > pace * dayN ? `${formatAmount(soFar - pace * dayN, home)} ahead of plan` : `${formatAmount(pace * dayN - soFar, home)} under`}).`
+    : `${formatAmount(spent, home)} over ${span || list.length} day${(span || list.length) === 1 ? '' : 's'}, about ${formatAmount(Math.round(spent / Math.max(span || list.length, 1)), home)} a day${pace != null ? ` against a budget of ${formatAmount(pace, home)} a day` : ''}.`;
+  const picked = day ? txs.filter((t) => t.date === day) : [];
+  if (!list.length) return <Empty title="No spending yet">Each day of the trip shows up here once something is spent.</Empty>;
+  return (
+    <div className="stack">
+      <div className="panel pad stack" data-testid="trip-days">
+        <div className="bars days">
+          {pace != null && <span className="pace" style={{ bottom: `${(pace / max) * 100}%` }} title={`Budget pace: ${formatAmount(pace, home)} a day`} />}
+          {list.map((x) => (
+            <button type="button" key={x.d} className={`col ${x.d === day ? 'cur' : ''} ${pace != null && x.v > pace ? 'over' : ''}`} title={`${fmtDate(x.d)}: ${formatAmount(x.v, home)}`} aria-pressed={x.d === day} onClick={() => setDay(x.d === day ? null : x.d)} data-testid={`day-${x.d}`}>
+              <div className="bar" style={{ height: `${Math.max((x.v / max) * 100, 1.5)}%` }} />
+            </button>
+          ))}
+        </div>
+        <div className="bars-labels days">{list.map((x) => <span key={x.d}>{Number(x.d.slice(8))}</span>)}</div>
+        <span className="small muted">{day ? `${fmtDate(day)}: ${formatAmount(perDay.get(day)?.get(home) ?? 0, home)}${pace != null ? ` (pace ${formatAmount(pace, home)})` : ''}` : summary}{unconverted ? ' Cash without a rate isn’t counted.' : ''}</span>
+      </div>
+      {day && <div className="panel"><TxList txs={picked} showTrip={false} onSelect={onOpen} /></div>}
+    </div>
+  );
+}
+
 /** Everything about one trip: members, totals, transactions, balances, per-person. Also used by shared read-only links. */
 export function TripView({ trip }: { trip: Trip }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
-  const [tab, setTab] = useState<'transactions' | 'categories' | 'balances' | 'people'>('transactions');
+  const [tab, setTab] = useState<'transactions' | 'categories' | 'days' | 'balances' | 'people'>('transactions');
   const [selected, setSelected] = useState<number | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
@@ -237,7 +281,7 @@ export function TripView({ trip }: { trip: Trip }) {
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
-        {(['transactions', 'categories', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
+        {(['transactions', 'categories', 'days', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
       {tab === 'transactions' && <div className="panel"><TxList txs={txs} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
       {tab === 'categories' && (
@@ -246,6 +290,7 @@ export function TripView({ trip }: { trip: Trip }) {
           {cat && <div className="panel"><TxList txs={txs.filter(cat.match)} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
         </div>
       )}
+      {tab === 'days' && <TripDays trip={trip} txs={txs} onOpen={(tx) => setSelected(tx.id)} />}
       {tab === 'balances' && <BalancesView txs={txs} tripId={trip.id} />}
       {tab === 'people' && (
         <div className="panel">
@@ -277,23 +322,41 @@ function TripDetail({ trip }: { trip: Trip }) {
   const openForm = useTxForm();
   const [edit, setEdit] = useState(false);
   const [share, setShare] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, run] = useBusy();
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
+  // Closing locks a settled trip so nobody shifts old balances by accident; only the owner can reopen it.
+  const setClosed = (closed: 0 | 1) => {
+    if (closed && !window.confirm(`Close ${trip.name}? Nobody can add, change or delete its entries until you reopen it. Comments and receipt photos still work.`)) return;
+    void run(async () => {
+      try {
+        await api('PUT', `/api/trips/${trip.id}`, { ...trip, closed });
+        await reload();
+        setErr(null);
+      } catch (e) {
+        setErr(errorText(e));
+      }
+    });
+  };
   const linkCount = state.shares.filter((x) => x.trip_id === trip.id).length;
   return (
     <div className="stack">
       <div className="page-head">
         <div>
           <a href="#/trips" className="back"><ChevronLeft />All trips</a>
-          <h1 className="row" style={{ gap: 10 }}><TripMark name={trip.name}><i className="avatar" style={{ ...hueStyle(trip.id), width: 12, height: 12 }} /></TripMark>{trip.name}{trip.archived ? <span className="badge">archived</span> : null}</h1>
+          <h1 className="row" style={{ gap: 10 }}><TripMark name={trip.name}><i className="avatar" style={{ ...hueStyle(trip.id), width: 12, height: 12 }} /></TripMark>{trip.name}{trip.closed ? <span className="badge"><Lock />closed</span> : null}{trip.archived ? <span className="badge">archived</span> : null}</h1>
           <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
         </div>
         <div className="row">
           <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>
           {owner && <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>}
-          <button onClick={() => openForm({ initial: { type: 'withdrawal', trip_id: trip.id } })}><Banknote />Cash withdrawal</button>
-          <button className="primary" onClick={() => openForm({ initial: { type: 'expense', trip_id: trip.id, currency: trip.currency } })} data-testid="trip-add-expense"><Plus />Add expense</button>
+          {owner && <button disabled={busy} onClick={() => setClosed(trip.closed ? 0 : 1)} data-testid="close-trip">{trip.closed ? <><LockOpen />Reopen</> : <><Lock />Close trip</>}</button>}
+          {!trip.closed && <button onClick={() => openForm({ initial: { type: 'withdrawal', trip_id: trip.id } })}><Banknote />Cash withdrawal</button>}
+          {!trip.closed && <button className="primary" onClick={() => openForm({ initial: { type: 'expense', trip_id: trip.id, currency: trip.currency } })} data-testid="trip-add-expense"><Plus />Add expense</button>}
         </div>
       </div>
+      {trip.closed ? <div className="info-box small" data-testid="trip-closed"><Lock /> Closed and locked: entries can’t be added, changed or deleted{owner ? '. Reopen to change them.' : ' unless the owner reopens it.'}</div> : null}
+      <ErrorBox error={err} />
       <TripView key={trip.id} trip={trip} />
       {owner && txs.length === 0 && (
         <div><DangerButton small={false} confirm={`Delete trip "${trip.name}"?`} onConfirm={async () => { await api('DELETE', `/api/trips/${trip.id}`); await reload(); navigate('/trips'); }}>Delete trip</DangerButton></div>

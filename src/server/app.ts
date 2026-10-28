@@ -5,6 +5,7 @@ import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type LedgerState,
 import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
+import { announce, publicKey } from './push.ts';
 
 interface Ctx {
   params: Record<string, string>;
@@ -273,7 +274,7 @@ export async function createApp(opts: AppOptions) {
     const start_date = b.start_date ? date(b.start_date, 'Start date') : null;
     const end_date = b.end_date ? date(b.end_date, 'End date') : null;
     if (start_date && end_date && end_date < start_date) throw new HttpError(400, 'End date is before the start date');
-    return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members, rates: rates(b.rates), budget: budget(b.budget) };
+    return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members, rates: rates(b.rates), budget: budget(b.budget), closed: flag(b.closed) };
   };
   route('POST', '/api/trips', 'owner', async (c) => db.createTrip(await tripBody(c)));
   route('PUT', '/api/trips/:id', 'owner', async (c) => (await db.updateTrip(Number(c.params.id), await tripBody(c)), { ok: true }));
@@ -283,6 +284,9 @@ export async function createApp(opts: AppOptions) {
     const tx = normalizeTx(id == null ? c.body : { ...c.body, id });
     const ctx = await ctxOf(c.user);
     const errors = validateTx(tx, ctx); // a member's ctx holds only their trips, people and accounts
+    // A closed trip is settled: nothing goes into it, and nothing in it changes or leaves, until the owner reopens it.
+    const shut = (await db.closedTrip(tx.trip_id)) ?? (id != null ? await db.closedTrip(ctx.transactions.find((t) => t.id === id)?.trip_id) : undefined);
+    if (shut) throw new HttpError(409, `${shut} is closed. Reopen it to change its entries.`);
     if (!isOwner(c)) {
       if (id != null && !ctx.transactions.some((t) => t.id === id)) throw new HttpError(404, 'Transaction not found');
       if (tx.trip_id == null && !involves(tx, c.user!.person_id)) errors.push('An entry outside your trips has to include you');
@@ -294,16 +298,49 @@ export async function createApp(opts: AppOptions) {
     const tx = await txBody(c);
     const every = repeat(c.body.repeat);
     if (every && tx.type === 'refund') throw new HttpError(400, 'A refund cannot repeat');
-    return db.createTx(tx, c.user!.person_id, { client_ref: optStr(c.body.queue_ref)?.slice(0, 64), repeat: every });
+    const saved = await db.createTx(tx, c.user!.person_id, { client_ref: optStr(c.body.queue_ref)?.slice(0, 64), repeat: every });
+    await announce(db, c.user!, saved, 'added');
+    return saved;
   });
-  route('PUT', '/api/transactions/:id', 'user', async (c) => db.updateTx(Number(c.params.id), await txBody(c, Number(c.params.id)), c.user!.person_id));
+  route('PUT', '/api/transactions/:id', 'user', async (c) => {
+    const saved = await db.updateTx(Number(c.params.id), await txBody(c, Number(c.params.id)), c.user!.person_id);
+    await announce(db, c.user!, saved, 'edited');
+    return saved;
+  });
   const seeTx = (c: Ctx) => mustSee(c, (s) => s.transactions.some((t) => t.id === Number(c.params.id)), 'Transaction');
-  route('DELETE', '/api/transactions/:id', 'user', async (c) => (await seeTx(c), await db.deleteTx(Number(c.params.id)), { ok: true }));
+  route('DELETE', '/api/transactions/:id', 'user', async (c) => {
+    await seeTx(c);
+    const shut = await db.closedTrip((await db.getTx(Number(c.params.id))).trip_id);
+    if (shut) throw new HttpError(409, `${shut} is closed. Reopen it to change its entries.`);
+    return (await db.deleteTx(Number(c.params.id)), { ok: true });
+  });
   route('GET', '/api/transactions/:id', 'user', async (c) => (await seeTx(c), db.getTx(Number(c.params.id))));
   route('DELETE', '/api/recurring/:id', 'user', async (c) => {
     await mustSee(c, (s) => !!s.recurring?.some((r) => r.id === Number(c.params.id)), 'Repeating entry');
     return (await db.stopRecurring(Number(c.params.id)), { ok: true });
   });
+
+  route('POST', '/api/transactions/:id/comments', 'user', async (c) => {
+    await seeTx(c);
+    const comment = await db.addComment(Number(c.params.id), c.user!.person_id, str(c.body.body, 'Comment', 1000));
+    await announce(db, c.user!, await db.getTx(Number(c.params.id)), { comment: comment.body });
+    return comment;
+  });
+  // Members remove their own comments; the owner can remove any.
+  route('DELETE', '/api/comments/:id', 'user', async (c) => {
+    await mustSee(c, (s) => !!s.comments?.some((x) => x.id === Number(c.params.id) && x.person_id === c.user!.person_id), 'Comment');
+    return (await db.deleteComment(Number(c.params.id)), { ok: true });
+  });
+
+  route('GET', '/api/push/key', 'user', async () => ({ key: await publicKey(db) }));
+  route('POST', '/api/push', 'user', async (c) => {
+    const keys = (c.body.keys ?? {}) as { p256dh?: unknown; auth?: unknown };
+    const endpoint = str(c.body.endpoint, 'Endpoint', 1000);
+    if (!/^https:\/\//.test(endpoint)) throw new HttpError(400, 'Not a push subscription');
+    await db.savePushSub(c.user!.id, { endpoint, p256dh: str(keys.p256dh, 'Key', 200), auth: str(keys.auth, 'Auth', 100) });
+    return { ok: true };
+  });
+  route('POST', '/api/push/off', 'user', async (c) => (await db.removePushSub(str(c.body.endpoint, 'Endpoint', 1000)), { ok: true }));
 
   // Receipt photos arrive already shrunk by the browser, as a data URL.
   route('POST', '/api/transactions/:id/receipts', 'user', async (c) => {

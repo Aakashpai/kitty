@@ -76,3 +76,21 @@ export function allocate(total: number, weights: number[]): number[] {
 }
 
 export const sum = (xs: number[]): number => xs.reduce((a, b) => a + b, 0);
+
+/**
+ * Shares of an itemised bill: each item is split equally between the people who had it, and whatever the items do
+ * not cover (tax, service, tip) is spread in proportion to what each person had. Shares always add up to `total`.
+ * Returns null when the items cost more than the total or nobody had anything.
+ */
+export function splitByItems(total: number, items: { amount: number; people: number[] }[]): { person_id: number; amount: number }[] | null {
+  const own = new Map<number, number>();
+  for (const it of items) {
+    if (!it.people.length) continue;
+    allocate(it.amount, it.people.map(() => 1)).forEach((a, i) => own.set(it.people[i]!, (own.get(it.people[i]!) ?? 0) + a));
+  }
+  const covered = sum([...own.values()]);
+  if (covered > total || covered === 0) return null;
+  const people = [...own.keys()];
+  const extra = allocate(total - covered, people.map((p) => own.get(p)!));
+  return people.map((p, i) => ({ person_id: p, amount: own.get(p)! + (extra[i] ?? 0) }));
+}

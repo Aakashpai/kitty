@@ -80,7 +80,8 @@ export function Overview() {
 
   // Entries someone else added or changed since this user last pressed "Got it" (never pressed: the latest few).
   const seenAt = user?.seen_at ?? '';
-  const fresh = user ? state.transactions.filter((t) => (t.added_by != null && t.added_by !== me.id && t.created_at > seenAt) || (t.edited_by != null && t.edited_by !== me.id && t.updated_at > seenAt)).slice(0, 8) : [];
+  const talked = new Set((state.comments ?? []).filter((c) => c.person_id !== me.id && c.created_at > seenAt).map((c) => c.tx_id));
+  const fresh = user ? state.transactions.filter((t) => talked.has(t.id) || (t.added_by != null && t.added_by !== me.id && t.created_at > seenAt) || (t.edited_by != null && t.edited_by !== me.id && t.updated_at > seenAt)).slice(0, 8) : [];
   const markSeen = async () => {
     setBusy(true);
     try {

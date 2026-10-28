@@ -36,6 +36,9 @@ export function normalizeTx(raw: Record<string, unknown>): TxInput {
     method: optStr(raw.method),
     reference: optStr(raw.reference),
     split_method: splitType ? ((optStr(raw.split_method) ?? 'equal') as TxInput['split_method']) : null,
+    items: splitType && Array.isArray(raw.items) && raw.items.length
+      ? raw.items.slice(0, 100).map((x: Record<string, unknown>) => ({ name: String(x?.name ?? '').trim().slice(0, 60), amount: Number(x?.amount), people: Array.isArray(x?.people) ? x.people.map(Number) : [] }))
+      : null,
     full_settlement: type === 'repayment' && (raw.full_settlement === 1 || raw.full_settlement === true) ? 1 : 0,
     splits: splitsRaw.map((s: Record<string, unknown>) => ({
       person_id: Number(s.person_id),
@@ -119,6 +122,11 @@ export function validateTx(tx: TxInput, ctx: LedgerCtx): string[] {
         else total += s.amount;
       }
       if (isMinor(tx.amount) && total !== tx.amount) errs.push(`Shares add up to ${total}, expected ${tx.amount}`);
+      if (tx.items?.length) {
+        if (tx.items.some((it) => !isMinor(it.amount) || it.amount <= 0 || !it.people.length)) errs.push('Each item needs a price and at least one person');
+        if (tx.items.some((it) => it.people.some((p) => !people.has(p)))) errs.push('Item shared with someone not found');
+        if (isMinor(tx.amount) && tx.items.reduce((s, it) => s + (isMinor(it.amount) ? it.amount : 0), 0) > tx.amount) errs.push('Items add up to more than the total');
+      }
       if (!isExpense && tx.linked_tx_id != null) {
         const orig = ctx.transactions.find((t) => t.id === tx.linked_tx_id);
         if (!orig || orig.type !== 'expense') errs.push('A refund can only be linked to an expense');
