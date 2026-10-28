@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Banknote, ChevronLeft, Coins, CreditCard, Landmark, Pencil, Plus, Wallet, type LucideIcon } from 'lucide-react';
-import { ACCOUNT_TYPES, accountEntries, parseAmount, toMajor, type Account } from '../../engine/index.ts';
+import { ACCOUNT_TYPES, accountEntries, formatAmount, parseAmount, toMajor, type Account } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { COMMON_CURRENCIES, useLedger } from '../store.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
@@ -98,7 +98,7 @@ function AccountDetail({ account }: { account: Account }) {
                 <tr key={r.tx.id} className="clickable" onClick={() => setSelected(r.tx.id)}>
                   <td className="nowrap muted">{fmtDate(r.tx.date)}</td>
                   <td><TypeBadge type={r.tx.type} /></td>
-                  <td>{r.tx.description}{r.tx.fee_amount && r.tx.from_account_id === account.id ? <span className="faint small"> · incl. fee {toMajor(r.tx.fee_amount, account.currency)}</span> : null}</td>
+                  <td>{r.tx.description}{r.tx.fee_amount && r.tx.from_account_id === account.id ? <span className="faint small"> · incl. fee {formatAmount(r.tx.fee_amount, account.currency)}</span> : null}</td>
                   <td className="num"><Money amount={r.delta} currency={account.currency} sign /></td>
                   <td className="num"><Money amount={r.balance} currency={account.currency} /></td>
                 </tr>

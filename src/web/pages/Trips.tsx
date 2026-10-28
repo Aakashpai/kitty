@@ -8,7 +8,7 @@ import { useTxForm } from '../components/txFormContext.ts';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
-import { CategorySpend, inCategory } from '../components/CategorySpend.tsx';
+import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
@@ -170,7 +170,7 @@ export function TripView({ trip }: { trip: Trip }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
   const [tab, setTab] = useState<'transactions' | 'categories' | 'balances' | 'people'>('transactions');
   const [selected, setSelected] = useState<number | null>(null);
-  const [cat, setCat] = useState<string | null>(null);
+  const [cat, setCat] = useState<CategoryPick | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
   const selectedTx = selected != null ? txs.find((t) => t.id === selected) : undefined;
   const spend = spendingBy(txs, () => 'all').get('all') ?? new Map();
@@ -209,8 +209,8 @@ export function TripView({ trip }: { trip: Trip }) {
       {tab === 'transactions' && <div className="panel"><TxList txs={txs} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
       {tab === 'categories' && (
         <div className="stack">
-          <CategorySpend txs={txs} person={readOnly ? undefined : me.id} selected={cat} onSelect={setCat} />
-          {cat && <div className="panel"><TxList txs={txs.filter((t) => inCategory(t, cat))} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
+          <CategorySpend txs={txs} person={readOnly ? undefined : me.id} selected={cat?.label ?? null} onSelect={setCat} />
+          {cat && <div className="panel"><TxList txs={txs.filter(cat.match)} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
         </div>
       )}
       {tab === 'balances' && <BalancesView txs={txs} tripId={trip.id} />}

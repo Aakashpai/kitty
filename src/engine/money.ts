@@ -18,15 +18,25 @@ export function parseAmount(text: string, currency: string): number | null {
   return m[1] && minor ? -minor : minor;
 }
 
-/** 123450 -> "SGD 1,234.50". Pass withCode=false for a bare "1,234.50". */
-export function formatAmount(minor: number, currency: string, withCode = true): string {
+// Fixed, not Intl: browsers disagree (SGD comes out as "SGD" or a bare "$"). Other rupees keep their code so nothing reads as ₹.
+const SYMBOLS: Record<string, string> = {
+  INR: '₹', USD: '$', EUR: '€', GBP: '£', JPY: '¥', KRW: '₩', VND: '₫', THB: '฿',
+  SGD: 'S$', AUD: 'A$', CAD: 'C$', HKD: 'HK$', MYR: 'RM', IDR: 'Rp',
+};
+
+/** "₹", "S$", "RM"…; the ISO code for anything without an unambiguous symbol. */
+export const currencySymbol = (currency: string): string => SYMBOLS[currency.toUpperCase()] ?? currency;
+
+/** 123450 -> "S$1,234.50", "RM 1,234.50", "AED 1,234.50". Pass withSymbol=false for a bare "1,234.50". */
+export function formatAmount(minor: number, currency: string, withSymbol = true): string {
   const d = decimalsOf(currency);
   const unit = 10 ** d;
   const abs = Math.abs(minor);
   const fracPart = abs % unit;
   const intPart = (abs - fracPart) / unit;
   const body = new Intl.NumberFormat('en-US').format(intPart) + (d ? '.' + String(fracPart).padStart(d, '0') : '');
-  return (minor < 0 ? '-' : '') + (withCode ? currency + ' ' : '') + body;
+  const sym = currencySymbol(currency);
+  return (minor < 0 ? '-' : '') + (withSymbol ? sym + (/[A-Za-z]$/.test(sym) ? ' ' : '') : '') + body;
 }
 
 /** 123450 -> "1234.50" (plain, for inputs). */

@@ -45,10 +45,12 @@ test('parseAmount is exact and strict', () => {
 });
 
 test('formatAmount and toMajor', () => {
-  assert.equal(formatAmount(123450, 'SGD'), 'SGD 1,234.50');
-  assert.equal(formatAmount(-5, 'JPY'), '-JPY 5');
+  assert.equal(formatAmount(123450, 'SGD'), 'S$1,234.50');
+  assert.equal(formatAmount(-5, 'JPY'), '-¥5');
   assert.equal(formatAmount(1050, 'KWD', false), '1.050');
-  assert.equal(formatAmount(7, 'INR'), 'INR 0.07');
+  assert.equal(formatAmount(7, 'INR'), '₹0.07');
+  assert.equal(formatAmount(2250, 'MYR'), 'RM 22.50');
+  assert.equal(formatAmount(1050, 'KWD'), 'KWD 1.050');
   assert.equal(toMajor(123450, 'SGD'), '1234.50');
   assert.equal(toMajor(-7, 'INR'), '-0.07');
 });

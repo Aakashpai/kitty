@@ -1,13 +1,19 @@
-import { formatAmount, homeSpendingBy, type Id, type Tx } from '../../engine/index.ts';
+import { homeSpendingBy, type Id, type Tx } from '../../engine/index.ts';
 import { CATEGORIES, categoryOf, useLedger } from '../store.tsx';
 import { MoneyList } from './ui.tsx';
 
-/** Spending entries (expenses and refunds) in one category. */
-export const inCategory = (t: Tx, cat: string) => (t.type === 'expense' || t.type === 'refund') && categoryOf(t) === cat;
+/** A picked row of the table: its label and which entries sit behind it. */
+export interface CategoryPick {
+  label: string;
+  match: (t: Tx) => boolean;
+}
 
+const REFUNDS = 'Refunds';
+// Refunds get their own row (money back, negative) instead of quietly netting inside a category.
+const spendKey = (t: Tx) => (t.type === 'refund' ? REFUNDS : categoryOf(t));
 const rank = (c: string) => {
   const i = CATEGORIES.indexOf(c);
-  return i < 0 ? CATEGORIES.length : i;
+  return c === REFUNDS ? CATEGORIES.length + 1 : i < 0 ? CATEGORIES.length : i;
 };
 const sum = (groups: Map<string, Map<string, number>>) => {
   const t = new Map<string, number>();
@@ -16,8 +22,9 @@ const sum = (groups: Map<string, Map<string, number>>) => {
 };
 
 /**
- * Spending per category in the home currency: everyone's total, one person's share, or both.
- * Selecting a row picks that category (again to clear), so the caller can list its entries.
+ * Spending per category in the home currency (everyone's total, one person's share, or both), refunds as their own
+ * row, then repayments below the total in the currency that changed hands. Selecting a row picks it (again to clear),
+ * so the caller can list the entries behind it.
  */
 export function CategorySpend({ txs, person, label = 'You', everyone = true, selected, onSelect }: {
   txs: Tx[];
@@ -25,39 +32,51 @@ export function CategorySpend({ txs, person, label = 'You', everyone = true, sel
   label?: string;
   everyone?: boolean;
   selected: string | null;
-  onSelect: (cat: string | null) => void;
+  onSelect: (pick: CategoryPick | null) => void;
 }) {
   const { rateCtx } = useLedger();
-  const all = homeSpendingBy(txs, rateCtx, categoryOf);
-  const mine = person != null ? homeSpendingBy(txs, rateCtx, categoryOf, person) : null;
+  const all = homeSpendingBy(txs, rateCtx, spendKey);
+  const mine = person != null ? homeSpendingBy(txs, rateCtx, spendKey, person) : null;
   const shown = everyone || !mine ? all : mine;
   const cats = [...shown].filter(([, m]) => [...m.values()].some((v) => v !== 0)).map(([c]) => c).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  const pick = (c: string) => onSelect(selected === c ? null : c);
-  // The table is in the home currency, so a plain home amount drops its code (keeps three columns on a phone); leftovers with no rate keep theirs.
-  const cell = (m: Map<string, number> = new Map()) => {
-    if ([...m].some(([cur, v]) => cur !== rateCtx.home && v !== 0)) return <MoneyList map={m} />;
-    const v = m.get(rateCtx.home) ?? 0;
-    return v ? <span className={`money ${v < 0 ? 'neg' : ''}`}>{formatAmount(v, rateCtx.home, false)}</span> : <span className="faint">—</span>;
+  const repaid = (pick: (t: Tx) => boolean) => {
+    const m = new Map<string, number>();
+    for (const t of txs) if (t.type === 'repayment' && pick(t)) m.set(t.currency, (m.get(t.currency) ?? 0) + t.amount);
+    return m;
   };
-  if (!cats.length) return <div className="panel"><div className="panel-body faint small">Nothing spent yet.</div></div>;
+  const isRepayment = (t: Tx) => t.type === 'repayment';
+  const repayRows: { label: string; match: (t: Tx) => boolean; all?: Map<string, number>; mine?: Map<string, number> }[] = mine
+    ? [
+        { label: 'Repayments paid', match: (t) => isRepayment(t) && t.payer_id === person, all: everyone ? repaid(isRepayment) : undefined, mine: repaid((t) => t.payer_id === person) },
+        { label: 'Repayments received', match: (t) => isRepayment(t) && t.payee_id === person, mine: repaid((t) => t.payee_id === person) },
+      ]
+    : [{ label: 'Repayments', match: isRepayment, all: repaid(isRepayment) }];
+  const visible = repayRows.filter((r) => [r.all, r.mine].some((m) => m && [...m.values()].some((v) => v !== 0)));
+  const pick = (p: CategoryPick) => onSelect(selected === p.label ? null : p);
+  const cell = (m?: Map<string, number>) => <MoneyList map={m ?? new Map()} />;
+  const row = (p: CategoryPick, a?: Map<string, number>, b?: Map<string, number>) => (
+    <tr key={p.label} className={`clickable ${selected === p.label ? 'on' : ''}`} tabIndex={0} role="button" aria-pressed={selected === p.label} onClick={() => pick(p)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p); } }} data-testid={`category-${p.label}`}>
+      <td>{p.label}</td>
+      {everyone && <td className="num">{cell(a)}</td>}
+      {mine && <td className="num">{cell(b)}</td>}
+    </tr>
+  );
+  if (!cats.length && !visible.length) return <div className="panel"><div className="panel-body faint small">Nothing spent yet.</div></div>;
   return (
     <div className="panel" data-testid="category-spend">
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Category · {rateCtx.home}</th>{everyone && <th className="num">Everyone</th>}{mine && <th className="num">{label}</th>}</tr></thead>
+          <thead><tr><th>Category</th>{everyone && <th className="num">Everyone</th>}{mine && <th className="num">{label}</th>}</tr></thead>
           <tbody>
-            {cats.map((c) => (
-              <tr key={c} className={`clickable ${selected === c ? 'on' : ''}`} tabIndex={0} role="button" aria-pressed={selected === c} onClick={() => pick(c)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(c); } }} data-testid={`category-${c}`}>
-                <td>{c}</td>
-                {everyone && <td className="num">{cell(all.get(c))}</td>}
-                {mine && <td className="num">{cell(mine.get(c))}</td>}
-              </tr>
-            ))}
+            {cats.map((c) => row({ label: c, match: (t) => (t.type === 'expense' || t.type === 'refund') && spendKey(t) === c }, all.get(c), mine?.get(c)))}
           </tbody>
-          <tfoot><tr><td>Total</td>{everyone && <td className="num">{cell(sum(all))}</td>}{mine && <td className="num" data-testid="category-mine-total">{cell(sum(mine))}</td>}</tr></tfoot>
+          <tfoot>
+            <tr><td>Total spent</td>{everyone && <td className="num">{cell(sum(all))}</td>}{mine && <td className="num" data-testid="category-mine-total">{cell(sum(mine))}</td>}</tr>
+            {visible.map((r) => row(r, r.all, r.mine))}
+          </tfoot>
         </table>
       </div>
-      <div className="panel-foot">Card spends as charged in {rateCtx.home}, cash at the trip or default rate. Tap a category to see its entries.</div>
+      <div className="panel-foot">Spending in {rateCtx.home}: card spends as charged, cash at the trip or default rate. Repayments aren’t spending and show in the currency paid. Tap a row to see its entries.</div>
     </div>
   );
 }

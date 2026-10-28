@@ -19,7 +19,7 @@ function Bars({ data, currency }: { data: { key: string; label: string; value: n
       <div className="bars">
         {data.map((d) => (
           <div key={d.key} className={`col ${d.key === now ? 'cur' : ''}`} title={`${d.label}: ${formatAmount(d.value, currency)}`}>
-            <span className="val">{formatAmount(d.value, currency, false)}</span>
+            <span className="val">{formatAmount(d.value, currency)}</span>
             <div className="bar" style={{ height: `${Math.max((d.value / max) * 100, 1.5)}%` }} />
           </div>
         ))}

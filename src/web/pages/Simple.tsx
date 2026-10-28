@@ -4,7 +4,7 @@ import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, type
 import { useLedger } from '../store.tsx';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
-import { CategorySpend, inCategory } from '../components/CategorySpend.tsx';
+import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
 import { Avatar, Money, MoneyList } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
@@ -15,7 +15,7 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<Tx | null>(null);
-  const [cat, setCat] = useState<string | null>(null);
+  const [cat, setCat] = useState<CategoryPick | null>(null);
   // A person share link, or the admin opening someone from People: the page speaks about that person and shows only their entries.
   const focus = focusProp ?? (readOnly && state.shared_person_id != null ? me.id : null);
   const subject = focus ?? me.id;
@@ -55,7 +55,7 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
     }
   }
   const Person = ({ id }: { id: Id }) => <span className="who"><Avatar id={id} name={people.get(id)?.name ?? '?'} small />{who(id)}</span>;
-  const listed = cat ? txs.filter((t) => inCategory(t, cat)) : txs;
+  const listed = cat ? txs.filter(cat.match) : txs;
   const recent = showAll ? listed : listed.slice(0, RECENT);
   return (
     <div className="simple stack">
@@ -84,10 +84,10 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
       </section>
       <section>
         <h2>{focus != null ? `${own} share of spending` : `Spent${trip ? ` on ${trip.name}` : ''}`}</h2>
-        <CategorySpend txs={txs} person={readOnly && focus == null ? undefined : subject} label={isYou ? 'You' : who(subject)} everyone={focus == null} selected={cat} onSelect={setCat} />
+        <CategorySpend txs={txs} person={readOnly && focus == null ? undefined : subject} label={isYou ? 'You' : who(subject)} everyone={focus == null} selected={cat?.label ?? null} onSelect={setCat} />
       </section>
       <section>
-        <div className="row between"><h2>{cat ? `${cat} entries` : showAll ? 'All entries' : 'Latest'}</h2>{listed.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${listed.length}`}</button>}</div>
+        <div className="row between"><h2>{cat ? cat.label : showAll ? 'All entries' : 'Latest'}</h2>{listed.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${listed.length}`}</button>}</div>
         <div className="panel"><TxList txs={recent} showTrip={!trip} onSelect={setSelected} as={subject} /></div>
       </section>
       {selected && <TxDetail tx={selected} onClose={() => setSelected(null)} />}
