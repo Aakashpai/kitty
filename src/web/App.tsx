@@ -49,7 +49,7 @@ const useSimple = () => {
 
 function Shell() {
   const { section, id, path } = useRoute();
-  const { state, user, logout } = useLedger();
+  const { state, user, logout, owner } = useLedger();
   const [theme, toggleTheme] = useTheme();
   const [form, setForm] = useState<{ initial?: Partial<TxInput>; existing?: Tx; onSaved?: (tx: Tx) => void } | null>(null);
   const [account, setAccount] = useState(false);
@@ -112,7 +112,7 @@ function Shell() {
               <a key={p} href={`#/${p}`} className={section === p ? 'active' : ''} title={label} aria-label={label}><I /><span className="label">{label}</span></a>
             ))}
           </nav>
-          <div className="nav-label">Trips <a href="#/trips/new" title="New trip" aria-label="New trip"><Plus /></a></div>
+          <div className="nav-label">Trips {owner && <a href="#/trips/new" title="New trip" aria-label="New trip"><Plus /></a>}</div>
           <nav className="nav" aria-label="Trips">
             {trips.map((t) => (
               <a key={t.id} href={`#/trips/${t.id}`} className={`trip-link ${section === 'trips' && id === t.id ? 'active' : ''}`} style={hueStyle(t.id)}>

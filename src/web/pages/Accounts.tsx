@@ -114,14 +114,14 @@ function AccountDetail({ account }: { account: Account }) {
 }
 
 export function Accounts({ id }: { id: number | null }) {
-  const { state, accounts, balances, reload, who } = useLedger();
+  const { state, ownAccounts, balances, reload, who, owner } = useLedger();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
   const [home, setHome] = useState(state.settings.home_currency);
   const [ratesDraft, setRatesDraft] = useState<Record<string, number> | null>(Object.keys(state.settings.rates ?? {}).length ? state.settings.rates : null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, run] = useBusy();
-  const account = id != null ? accounts.get(id) : undefined;
+  const account = id != null ? ownAccounts.find((a) => a.id === id) : undefined;
   const settingsDirty = home !== state.settings.home_currency || JSON.stringify(ratesDraft ?? {}) !== JSON.stringify(state.settings.rates ?? {});
   if (id != null && !account) return <Empty title="Account not found"><a href="#/accounts">Back</a></Empty>;
   if (account) return <AccountDetail account={account} />;
@@ -149,14 +149,14 @@ export function Accounts({ id }: { id: number | null }) {
         <button className="primary" onClick={() => setCreating(true)} data-testid="new-account"><Plus />New account</button>
       </div>
       <ErrorBox error={err} />
-      {state.accounts.length === 0 ? (
+      {ownAccounts.length === 0 ? (
         <Empty title="No accounts yet">Add a cash holding for each currency you carry, plus the bank accounts and cards you pay from. Expenses can also be recorded without any account.</Empty>
       ) : (
         <div className="panel table-wrap">
           <table data-testid="accounts-table">
             <thead><tr><th>Name</th><th>Type</th><th>Owner</th><th className="num">Balance</th><th></th></tr></thead>
             <tbody>
-              {state.accounts.map((a) => (
+              {ownAccounts.map((a) => (
                 <tr key={a.id} style={{ opacity: a.archived ? 0.55 : 1 }}>
                   <td><a href={`#/accounts/${a.id}`} className="who" style={{ color: 'inherit' }}><AccountIcon type={a.type} />{a.name}{a.archived ? <span className="badge">archived</span> : null}</a></td>
                   <td className="muted">{typeLabel(a.type)}</td>
@@ -173,7 +173,7 @@ export function Accounts({ id }: { id: number | null }) {
           </table>
         </div>
       )}
-      <div className="panel pad stack">
+      {owner && <div className="panel pad stack">
         <div>
           <h3>Home currency & exchange rates</h3>
           <p className="faint small" style={{ marginTop: 4 }}>Balances are always kept in the currency they were incurred in. The rates below only power the “In {home}” view: card charges that already carry an {home} amount use that real figure; everything else (cash, hand-overs, repayments) uses these rates as an estimate. A trip can override them.</p>
@@ -185,7 +185,7 @@ export function Accounts({ id }: { id: number | null }) {
         </div>
         <RatesEditor value={ratesDraft} onChange={setRatesDraft} home={home} testId="global-rates" />
         <div><button className="primary" onClick={() => void saveHome()} disabled={busy || !settingsDirty} data-testid="save-settings">{busy && <Spinner />}Save</button></div>
-      </div>
+      </div>}
       {creating && <AccountForm onClose={() => setCreating(false)} />}
       {editing && <AccountForm existing={editing} onClose={() => setEditing(null)} />}
     </div>

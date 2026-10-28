@@ -31,7 +31,7 @@ function Bars({ data, currency }: { data: { key: string; label: string; value: n
 
 export function Overview() {
   const l = useLedger();
-  const { state, me, balances, reload, who, rateCtx } = l;
+  const { state, me, balances, reload, who, rateCtx, owner, ownAccounts } = l;
   const openForm = useTxForm();
   const [selected, setSelected] = useState<number | null>(null);
   const [cur, setCur] = useState<string | null>(null);
@@ -56,7 +56,7 @@ export function Overview() {
   const monthShare = new Map<string, number>();
   for (const tx of state.transactions) if (tx.date.startsWith(month)) addTo(monthShare, tx.currency, shareOf(tx, me.id));
   const cashByCur = new Map<string, number>();
-  for (const a of state.accounts) if (a.type === 'cash' && !a.archived) addTo(cashByCur, a.currency, balances.accounts.get(a.id) ?? 0);
+  for (const a of ownAccounts) if (a.type === 'cash' && !a.archived) addTo(cashByCur, a.currency, balances.accounts.get(a.id) ?? 0);
   const activeTrips = state.trips.filter((t) => !t.archived);
 
   // chart: six months ending now, my share, per currency
@@ -98,7 +98,7 @@ export function Overview() {
           <span>Friends, trips and accounts can be added as you go. Nothing has to be set up first.</span>
           <div className="row">
             <button className="primary" onClick={() => openForm()} data-testid="first-expense"><Plus />Add an expense</button>
-            <button onClick={() => void loadSample()} disabled={busy} data-testid="load-sample">{busy ? 'Loading…' : 'Load sample data'}</button>
+            {owner && <button onClick={() => void loadSample()} disabled={busy} data-testid="load-sample">{busy ? 'Loading…' : 'Load sample data'}</button>}
           </div>
           <ErrorBox error={err} />
         </Empty>
@@ -153,7 +153,7 @@ export function Overview() {
                       </tr>
                     );
                   })}
-                  {activeTrips.length === 0 && <tr><td className="faint">No active trips. <a href="#/trips/new">Create one</a></td></tr>}
+                  {activeTrips.length === 0 && <tr><td className="faint">No active trips.{owner && <> <a href="#/trips/new">Create one</a></>}</td></tr>}
                 </tbody>
               </table>
             </div>

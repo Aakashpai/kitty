@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
-import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type Trip, type UserPublic } from '../engine/index.ts';
-import { HttpError, openDb, type Db } from './db.ts';
+import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type LedgerState, type Trip, type UserPublic } from '../engine/index.ts';
+import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
 
@@ -106,6 +106,11 @@ export async function createApp(opts: AppOptions) {
     routes.push({ method, re, keys, access, handler });
   };
   const ctxOf = async (user: UserPublic | null) => db.loadState(user);
+  const isOwner = (c: Ctx) => c.user?.role === 'owner';
+  // Members may only touch what their own slice of the ledger holds (each trip is a group); the owner sees everything.
+  const mustSee = async (c: Ctx, has: (s: LedgerState) => boolean, what: string) => {
+    if (!isOwner(c) && !has(await ctxOf(c.user))) throw new HttpError(404, `${what} not found`);
+  };
   const ownerPerson = async () => {
     const p = (await db.loadState(null)).people.find((x) => x.is_me);
     if (!p) throw new HttpError(500, 'No "me" person configured');
@@ -180,8 +185,16 @@ export async function createApp(opts: AppOptions) {
   });
 
   // --- view-only share links ----------------------------------------------------------------
-  route('POST', '/api/shares', 'user', async (c) => db.createShare({ token: randomToken(18), trip_id: c.body.trip_id == null || c.body.trip_id === '' ? null : int(c.body.trip_id, 'Trip'), person_id: c.body.person_id == null || c.body.person_id === '' ? null : int(c.body.person_id, 'Person'), label: optStr(c.body.label), created_by: c.user!.id }));
-  route('DELETE', '/api/shares/:id', 'user', async (c) => (await db.revokeShare(Number(c.params.id)), { ok: true }));
+  route('POST', '/api/shares', 'user', async (c) => {
+    const trip_id = c.body.trip_id == null || c.body.trip_id === '' ? null : int(c.body.trip_id, 'Trip');
+    const person_id = c.body.person_id == null || c.body.person_id === '' ? null : int(c.body.person_id, 'Person');
+    await mustSee(c, (s) => s.trips.some((t) => t.id === trip_id) && (person_id == null || s.people.some((p) => p.id === person_id)), 'Trip'); // members share one of their trips only
+    return db.createShare({ token: randomToken(18), trip_id, person_id, label: optStr(c.body.label), created_by: c.user!.id });
+  });
+  route('DELETE', '/api/shares/:id', 'user', async (c) => {
+    await mustSee(c, (s) => s.shares.some((x) => x.id === Number(c.params.id)), 'Link');
+    return (await db.revokeShare(Number(c.params.id)), { ok: true });
+  });
   route('GET', '/api/shared/:token', 'public', async (c) => {
     const share = await db.getShare(c.params.token ?? '');
     if (!share) throw new HttpError(404, 'This link has been turned off or never existed.');
@@ -190,15 +203,18 @@ export async function createApp(opts: AppOptions) {
 
   // --- ledger ---------------------------------------------------------------------------------
   route('GET', '/api/state', 'user', (c) => db.loadState(c.user));
-  route('PUT', '/api/settings', 'user', async (c) => {
+  route('PUT', '/api/settings', 'owner', async (c) => {
     if (c.body.home_currency !== undefined) await db.setSetting('home_currency', currency(c.body.home_currency));
     if (c.body.rates !== undefined) await db.setSetting('rates', JSON.stringify(rates(c.body.rates) ?? {}));
     return { ok: true };
   });
 
-  route('POST', '/api/people', 'user', (c) => db.createPerson(str(c.body.name, 'Name')));
-  route('PUT', '/api/people/:id', 'user', async (c) => (await db.updatePerson(Number(c.params.id), { name: str(c.body.name, 'Name'), archived: flag(c.body.archived), upi_id: upi(c.body.upi_id) }), { ok: true }));
-  route('DELETE', '/api/people/:id', 'user', async (c) => (await db.deletePerson(Number(c.params.id)), { ok: true }));
+  route('POST', '/api/people', 'owner', (c) => db.createPerson(str(c.body.name, 'Name')));
+  route('PUT', '/api/people/:id', 'user', async (c) => {
+    if (!isOwner(c) && Number(c.params.id) !== c.user!.person_id) throw new HttpError(403, 'You can only edit your own name and UPI ID');
+    return (await db.updatePerson(Number(c.params.id), { name: str(c.body.name, 'Name'), archived: flag(c.body.archived), upi_id: upi(c.body.upi_id) }), { ok: true });
+  });
+  route('DELETE', '/api/people/:id', 'owner', async (c) => (await db.deletePerson(Number(c.params.id)), { ok: true }));
 
   const accountBody = async (c: Ctx): Promise<Omit<Account, 'id'>> => {
     const b = c.body;
@@ -208,11 +224,13 @@ export async function createApp(opts: AppOptions) {
     const fallback = people.find((p) => p.id === c.user?.person_id) ?? people.find((p) => p.is_me);
     const person_id = b.person_id == null || b.person_id === '' ? fallback?.id : int(b.person_id, 'Owner');
     if (person_id == null || !people.some((p) => p.id === person_id)) throw new HttpError(400, 'Owner not found');
+    if (!isOwner(c) && person_id !== c.user!.person_id) throw new HttpError(403, 'You can only manage your own accounts');
     return { person_id, name: str(b.name, 'Name'), type, currency: currency(b.currency), opening_balance: int(b.opening_balance ?? 0, 'Opening balance'), archived: flag(b.archived) };
   };
   route('POST', '/api/accounts', 'user', async (c) => db.createAccount(await accountBody(c)));
-  route('PUT', '/api/accounts/:id', 'user', async (c) => (await db.updateAccount(Number(c.params.id), await accountBody(c)), { ok: true }));
-  route('DELETE', '/api/accounts/:id', 'user', async (c) => (await db.deleteAccount(Number(c.params.id)), { ok: true }));
+  const ownAccount = (c: Ctx, id: number) => mustSee(c, (s) => s.accounts.some((a) => a.id === id && a.person_id === c.user!.person_id), 'Account');
+  route('PUT', '/api/accounts/:id', 'user', async (c) => (await ownAccount(c, Number(c.params.id)), await db.updateAccount(Number(c.params.id), await accountBody(c)), { ok: true }));
+  route('DELETE', '/api/accounts/:id', 'user', async (c) => (await ownAccount(c, Number(c.params.id)), await db.deleteAccount(Number(c.params.id)), { ok: true }));
 
   const tripBody = async (c: Ctx): Promise<Omit<Trip, 'id'>> => {
     const b = c.body;
@@ -224,25 +242,36 @@ export async function createApp(opts: AppOptions) {
     if (start_date && end_date && end_date < start_date) throw new HttpError(400, 'End date is before the start date');
     return { name: str(b.name, 'Name'), start_date, end_date, currency: currency(b.currency), notes: optStr(b.notes), archived: flag(b.archived), members, rates: rates(b.rates) };
   };
-  route('POST', '/api/trips', 'user', async (c) => db.createTrip(await tripBody(c)));
-  route('PUT', '/api/trips/:id', 'user', async (c) => (await db.updateTrip(Number(c.params.id), await tripBody(c)), { ok: true }));
-  route('DELETE', '/api/trips/:id', 'user', async (c) => (await db.deleteTrip(Number(c.params.id)), { ok: true }));
+  route('POST', '/api/trips', 'owner', async (c) => db.createTrip(await tripBody(c)));
+  route('PUT', '/api/trips/:id', 'owner', async (c) => (await db.updateTrip(Number(c.params.id), await tripBody(c)), { ok: true }));
+  route('DELETE', '/api/trips/:id', 'owner', async (c) => (await db.deleteTrip(Number(c.params.id)), { ok: true }));
 
   const txBody = async (c: Ctx, id?: number) => {
     const tx = normalizeTx(id == null ? c.body : { ...c.body, id });
-    const errors = validateTx(tx, await ctxOf(c.user));
+    const ctx = await ctxOf(c.user);
+    const errors = validateTx(tx, ctx); // a member's ctx holds only their trips, people and accounts
+    if (!isOwner(c)) {
+      if (id != null && !ctx.transactions.some((t) => t.id === id)) throw new HttpError(404, 'Transaction not found');
+      if (tx.trip_id == null && !involves(tx, c.user!.person_id)) errors.push('An entry outside your trips has to include you');
+    }
     if (errors.length) throw new HttpError(422, 'Transaction is not valid', errors);
     return tx;
   };
   route('POST', '/api/transactions', 'user', async (c) => db.createTx(await txBody(c)));
   route('PUT', '/api/transactions/:id', 'user', async (c) => db.updateTx(Number(c.params.id), await txBody(c, Number(c.params.id))));
-  route('DELETE', '/api/transactions/:id', 'user', async (c) => (await db.deleteTx(Number(c.params.id)), { ok: true }));
-  route('GET', '/api/transactions/:id', 'user', (c) => db.getTx(Number(c.params.id)));
+  const seeTx = (c: Ctx) => mustSee(c, (s) => s.transactions.some((t) => t.id === Number(c.params.id)), 'Transaction');
+  route('DELETE', '/api/transactions/:id', 'user', async (c) => (await seeTx(c), await db.deleteTx(Number(c.params.id)), { ok: true }));
+  route('GET', '/api/transactions/:id', 'user', async (c) => (await seeTx(c), db.getTx(Number(c.params.id))));
 
-  route('POST', '/api/reconciliations', 'user', (c) =>
-    db.createReconciliation({ account_id: int(c.body.account_id, 'Account'), date: date(c.body.date, 'Date'), counted_amount: int(c.body.counted_amount, 'Counted amount'), expected_amount: int(c.body.expected_amount, 'Expected amount'), note: optStr(c.body.note) }),
-  );
-  route('DELETE', '/api/reconciliations/:id', 'user', async (c) => (await db.deleteReconciliation(Number(c.params.id)), { ok: true }));
+  route('POST', '/api/reconciliations', 'user', async (c) => {
+    const account_id = int(c.body.account_id, 'Account');
+    await ownAccount(c, account_id);
+    return db.createReconciliation({ account_id, date: date(c.body.date, 'Date'), counted_amount: int(c.body.counted_amount, 'Counted amount'), expected_amount: int(c.body.expected_amount, 'Expected amount'), note: optStr(c.body.note) });
+  });
+  route('DELETE', '/api/reconciliations/:id', 'user', async (c) => {
+    await mustSee(c, (s) => s.reconciliations.some((r) => r.id === Number(c.params.id)), 'Reconciliation');
+    return (await db.deleteReconciliation(Number(c.params.id)), { ok: true });
+  });
 
   route('POST', '/api/seed', 'owner', async () => {
     if (!(await db.isEmpty())) throw new HttpError(409, 'Sample data is only loaded into an empty ledger');

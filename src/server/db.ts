@@ -331,7 +331,7 @@ export async function openDb(url: string, authToken?: string) {
         state.users = rows<UserPublic>(10);
         state.invites = rows<Invite>(11);
       }
-      return state;
+      return user && !owner ? memberSlice(state, user.person_id, user.id) : state;
     },
     /** Read-only view for a share link: one trip, or one person's entries across trips. No accounts, no personal money movements, no history. */
     loadSharedState: async (share: { trip_id: Id | null; person_id: Id | null }): Promise<LedgerState> => {
@@ -586,3 +586,33 @@ export async function openDb(url: string, authToken?: string) {
 export type Db = Awaited<ReturnType<typeof openDb>>;
 
 const txLabel = (tx: Tx) => `${tx.description || tx.type} (${formatAmount(tx.amount, tx.currency)})`;
+
+/** True when the person pays, receives or shares in the entry. */
+export const involves = (t: Pick<Tx, 'payer_id' | 'payee_id' | 'splits'>, pid: Id | null) =>
+  pid != null && (t.payer_id === pid || t.payee_id === pid || t.splits.some((s) => s.person_id === pid));
+
+/**
+ * What a member (not the owner) sees: each trip is a group, so only the trips they belong to, the entries in those trips
+ * or involving them, and the people and accounts those touch. Other people's accounts come as names only (no balance),
+ * history only for visible entries, links only their own. The page speaks to them, so they are "me".
+ */
+function memberSlice(s: LedgerState, pid: Id | null, uid: Id): LedgerState {
+  const trips = s.trips.filter((t) => pid != null && t.members.includes(pid));
+  const tripIds = new Set(trips.map((t) => t.id));
+  const transactions = s.transactions.filter((t) => (t.trip_id != null && tripIds.has(t.trip_id)) || involves(t, pid));
+  const txIds = new Set(transactions.map((t) => t.id));
+  const seen = new Set<Id | null>([pid, ...trips.flatMap((t) => t.members), ...transactions.flatMap((t) => [t.payer_id, t.payee_id, ...t.splits.map((x) => x.person_id)])]);
+  const used = new Set(transactions.flatMap((t) => [t.from_account_id, t.to_account_id]));
+  const accounts = s.accounts.filter((a) => a.person_id === pid || used.has(a.id)).map((a) => (a.person_id === pid ? a : { ...a, opening_balance: 0 }));
+  const own = new Set(accounts.filter((a) => a.person_id === pid).map((a) => a.id));
+  return {
+    ...s,
+    people: s.people.filter((p) => seen.has(p.id)).map((p) => ({ ...p, is_me: p.id === pid ? 1 : 0 })),
+    accounts,
+    trips,
+    transactions,
+    reconciliations: s.reconciliations.filter((r) => own.has(r.account_id)),
+    activity: s.activity.filter((a) => a.entity === 'transaction' && a.entity_id != null && txIds.has(a.entity_id)),
+    shares: s.shares.filter((x) => x.created_by === uid),
+  };
+}

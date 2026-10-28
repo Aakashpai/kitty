@@ -9,6 +9,8 @@ export interface Ledger {
   me: Person;
   user: UserPublic | null;
   readOnly: boolean;
+  owner: boolean; // the admin; members only get the trips they belong to and entries involving them
+  ownAccounts: Account[]; // accounts whose balances this viewer can see: all for the owner, their own for a member
   people: Map<Id, Person>;
   accounts: Map<Id, Account>;
   trips: Map<Id, Trip>;
@@ -138,12 +140,15 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
     const accounts = new Map(state.accounts.map((a) => [a.id, a]));
     const trips = new Map(state.trips.map((t) => [t.id, t]));
     const me = (state.user?.person_id != null ? people.get(state.user.person_id) : undefined) ?? state.people.find((p) => p.is_me) ?? state.people[0]!;
+    const owner = state.user?.role === 'owner';
     return {
       state,
       reload,
       me,
       user: state.user,
       readOnly,
+      owner,
+      ownAccounts: owner ? state.accounts : state.accounts.filter((a) => a.person_id === me.id),
       people,
       accounts,
       trips,

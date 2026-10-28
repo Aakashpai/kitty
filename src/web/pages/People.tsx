@@ -8,14 +8,13 @@ import { ShareModal } from './Trips.tsx';
 import { SimpleView } from './Simple.tsx';
 
 export function People() {
-  const { state, balances, reload, me, user, rateCtx } = useLedger();
+  const { state, balances, reload, me, rateCtx, owner: isOwner } = useLedger();
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: number; name: string; upi: string } | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [sharing, setSharing] = useState<Person | null>(null);
   const [busy, guard] = useBusy();
-  const isOwner = user?.role === 'owner';
   const home = rateCtx.home;
   const run = (fn: () => Promise<unknown>) =>
     guard(async () => {
@@ -58,10 +57,10 @@ export function People() {
     <div className="stack">
       <div className="page-head">
         <div><h1>People</h1><div className="sub">{state.people.length - 1} friend{state.people.length === 2 ? '' : 's'} · amounts shown as what each person owes you, or you owe them</div></div>
-        <form className="row" onSubmit={(e) => { e.preventDefault(); if (name.trim()) void add(); }}>
+        {isOwner && <form className="row" onSubmit={(e) => { e.preventDefault(); if (name.trim()) void add(); }}>
           <input value={name} placeholder="Friend's name" style={{ width: 220 }} onChange={(e) => setName(e.target.value)} data-testid="person-name" />
           <button className="primary" type="submit" disabled={busy || !name.trim()} data-testid="add-person">{busy ? <Spinner /> : <Plus />}Add</button>
-        </form>
+        </form>}
       </div>
       <ErrorBox error={err} />
       <div className="panel">
@@ -110,15 +109,15 @@ export function People() {
                   {isOwner && inv && (
                     <button className="small" onClick={() => void copyInvite(inv)} data-testid={`copy-invite-${p.id}`}><Copy />{copied === inv.id ? 'Copied' : 'Copy link'}</button>
                   )}
-                  <details className="menu">
+                  {(isOwner || p.id === me.id) && <details className="menu">
                     <summary aria-label={`More actions for ${p.name}`}><MoreHorizontal /></summary>
                     <div className="menu-list" onClick={(e) => { (e.currentTarget.closest('details') as HTMLDetailsElement).open = false; }}>
                       <button className="small ghost" onClick={() => setEditing({ id: p.id, name: p.name, upi: p.upi_id ?? '' })}>Rename / UPI ID</button>
-                      {!p.is_me && <button className="small ghost" onClick={() => setSharing(p)} data-testid={`share-person-${p.id}`}>Share their view</button>}
-                      {!p.is_me && <button className="small ghost" disabled={busy} onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
-                      {!p.is_me && <DangerButton confirm={`Delete ${p.name}? Only possible if they have no transactions.`} onConfirm={() => run(() => api('DELETE', `/api/people/${p.id}`))}>Delete</DangerButton>}
+                      {isOwner && !p.is_me && <button className="small ghost" onClick={() => setSharing(p)} data-testid={`share-person-${p.id}`}>Share their view</button>}
+                      {isOwner && !p.is_me && <button className="small ghost" disabled={busy} onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
+                      {isOwner && !p.is_me && <DangerButton confirm={`Delete ${p.name}? Only possible if they have no transactions.`} onConfirm={() => run(() => api('DELETE', `/api/people/${p.id}`))}>Delete</DangerButton>}
                     </div>
-                  </details>
+                  </details>}
                 </div>
               </div>
             );
@@ -126,7 +125,7 @@ export function People() {
         </div>
         <div className="panel-foot">The {home} figure values card charges at their real {home} amount and everything else at your set rates; the small line is the exact position per currency. Group-wide balances between friends are on the Balances page.</div>
       </div>
-      {state.people.length <= 1 && <Empty title="Just you so far">Add the friends you travel with; they only need a login if they want to see the ledger themselves.</Empty>}
+      {isOwner && state.people.length <= 1 && <Empty title="Just you so far">Add the friends you travel with; they only need a login if they want to see the ledger themselves.</Empty>}
       {isOwner && (
         <div className="panel" data-testid="access-panel">
           <div className="panel-head"><h3>Who can sign in</h3><span className="faint small">Invite links work once and expire after 7 days</span></div>
@@ -158,7 +157,7 @@ export function People() {
               </tbody>
             </table>
           </div>
-          <div className="panel-foot">Everyone who signs in shares this ledger and sees balances from their own point of view. Send an invite link privately; whoever opens it first gets that person's seat.</div>
+          <div className="panel-foot">Each trip is its own group: someone who signs in sees only the trips you add them to and entries that involve them, from their own point of view. You see everything. Send an invite link privately; whoever opens it first gets that person's seat.</div>
         </div>
       )}
       {sharing && <ShareModal person={sharing} onClose={() => setSharing(null)} />}
@@ -168,7 +167,7 @@ export function People() {
 
 /** What one person sees on their share link, for the admin: only their entries, their share, where they stand. */
 export function PersonView({ id }: { id: number }) {
-  const { people } = useLedger();
+  const { people, owner } = useLedger();
   const [scope, setScope] = useState('');
   const [share, setShare] = useState(false);
   const p = people.get(id);
@@ -181,7 +180,7 @@ export function PersonView({ id }: { id: number }) {
           <h1 className="row" style={{ gap: 10 }}><Avatar id={p.id} name={p.name} small />{p.name}</h1>
           <div className="sub">{p.is_me ? 'Your own entries and where you stand' : `What ${p.name} sees on their link: only their entries, their share, and what they owe or are owed`}</div>
         </div>
-        {!p.is_me && <button onClick={() => setShare(true)} data-testid="share-person-page"><Link2 />Share their view</button>}
+        {owner && !p.is_me && <button onClick={() => setShare(true)} data-testid="share-person-page"><Link2 />Share their view</button>}
       </div>
       <div className="simple-wrap"><SimpleView scope={scope} onScope={setScope} focus={p.id} /></div>
       {share && <ShareModal person={p} onClose={() => setShare(false)} />}

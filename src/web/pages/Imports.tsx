@@ -298,19 +298,19 @@ function ImportStatement({ account }: { account: Account }) {
 }
 
 export function Imports() {
-  const { state, accounts } = useLedger();
+  const { ownAccounts } = useLedger();
   const { id, path } = useRoute();
-  const cashFirst = [...state.accounts].filter((a) => !a.archived).sort((a, b) => (a.type === 'cash' ? -1 : 1) - (b.type === 'cash' ? -1 : 1));
+  const cashFirst = [...ownAccounts].filter((a) => !a.archived).sort((a, b) => (a.type === 'cash' ? -1 : 1) - (b.type === 'cash' ? -1 : 1));
   const [accountId, setAccountId] = useState<number | null>(id ?? cashFirst[0]?.id ?? null);
   const [tab, setTab] = useState<'reconcile' | 'import'>(path.endsWith('/import') ? 'import' : 'reconcile');
-  const account = accountId != null ? accounts.get(accountId) : undefined;
+  const account = accountId != null ? ownAccounts.find((a) => a.id === accountId) : undefined;
   return (
     <div className="stack">
       <div className="page-head">
         <div><h1>Imports & Reconciliation</h1><div className="sub">Compare what the ledger expects with what you actually have</div></div>
         <Field label="Account">
           <select value={accountId ?? ''} onChange={(e) => setAccountId(e.target.value ? Number(e.target.value) : null)} data-testid="recon-account">
-            {state.accounts.length === 0 && <option value="">No accounts yet</option>}
+            {ownAccounts.length === 0 && <option value="">No accounts yet</option>}
             {cashFirst.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.currency}{a.type === 'cash' ? ', cash' : ''})</option>)}
           </select>
         </Field>

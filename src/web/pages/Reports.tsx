@@ -54,7 +54,7 @@ function GroupTable({ title, groups, note }: { title: string; groups: Map<string
 }
 
 export function Reports() {
-  const { state, me, who, accountName, trips, reload, rateCtx } = useLedger();
+  const { state, me, who, accountName, trips, reload, rateCtx, owner } = useLedger();
   const [scope, setScope] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -162,12 +162,14 @@ export function Reports() {
         <div className="panel-body stack">
           <div className="row">
             <button onClick={exportCsv} data-testid="export-csv"><Download />CSV of this range</button>
-            <button disabled={busy} onClick={() => void backup()} data-testid="download-backup">{busy ? <Spinner /> : <Download />}Full backup (JSON)</button>
-            <button disabled={busy} onClick={() => void snapshot()}><Database />Snapshot database file</button>
-            <label className="btn">
-              <Upload />Restore from backup… <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); }} data-testid="restore-file" />
-            </label>
-            <DangerButton small={false} confirm="Clear the whole activity log? Per-transaction history and delete snapshots go with it." onConfirm={async () => { await api('DELETE', '/api/activity'); await reload(); setMsg('Activity log cleared.'); setErr(null); }}><Eraser />Clear activity log</DangerButton>
+            {owner && <>
+              <button disabled={busy} onClick={() => void backup()} data-testid="download-backup">{busy ? <Spinner /> : <Download />}Full backup (JSON)</button>
+              <button disabled={busy} onClick={() => void snapshot()}><Database />Snapshot database file</button>
+              <label className="btn">
+                <Upload />Restore from backup… <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); }} data-testid="restore-file" />
+              </label>
+              <DangerButton small={false} confirm="Clear the whole activity log? Per-transaction history and delete snapshots go with it." onConfirm={async () => { await api('DELETE', '/api/activity'); await reload(); setMsg('Activity log cleared.'); setErr(null); }}><Eraser />Clear activity log</DangerButton>
+            </>}
           </div>
           {msg && <div className="ok-box">{msg}</div>}
           <ErrorBox error={err} />

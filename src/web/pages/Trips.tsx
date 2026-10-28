@@ -240,7 +240,7 @@ export function TripView({ trip }: { trip: Trip }) {
 }
 
 function TripDetail({ trip }: { trip: Trip }) {
-  const { state, reload } = useLedger();
+  const { state, reload, owner } = useLedger();
   const openForm = useTxForm();
   const [edit, setEdit] = useState(false);
   const [share, setShare] = useState(false);
@@ -256,13 +256,13 @@ function TripDetail({ trip }: { trip: Trip }) {
         </div>
         <div className="row">
           <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>
-          <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>
+          {owner && <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>}
           <button onClick={() => openForm({ initial: { type: 'withdrawal', trip_id: trip.id } })}><Banknote />Cash withdrawal</button>
           <button className="primary" onClick={() => openForm({ initial: { type: 'expense', trip_id: trip.id, currency: trip.currency } })} data-testid="trip-add-expense"><Plus />Add expense</button>
         </div>
       </div>
       <TripView key={trip.id} trip={trip} />
-      {txs.length === 0 && (
+      {owner && txs.length === 0 && (
         <div><DangerButton small={false} confirm={`Delete trip "${trip.name}"?`} onConfirm={async () => { await api('DELETE', `/api/trips/${trip.id}`); await reload(); navigate('/trips'); }}>Delete trip</DangerButton></div>
       )}
       {edit && <TripForm existing={trip} onClose={() => setEdit(false)} />}
@@ -272,7 +272,7 @@ function TripDetail({ trip }: { trip: Trip }) {
 }
 
 export function Trips({ id, creating = false }: { id: number | null; creating?: boolean }) {
-  const { state, trips } = useLedger();
+  const { state, trips, owner } = useLedger();
   const [open, setOpen] = useState(false);
   const trip = id != null && !Number.isNaN(id) ? trips.get(id) : undefined;
   if (id != null && !Number.isNaN(id) && !trip) return <Empty title="Trip not found"><a href="#/trips">Back to trips</a></Empty>;
@@ -283,9 +283,9 @@ export function Trips({ id, creating = false }: { id: number | null; creating?: 
     <div className="stack">
       <div className="page-head">
         <div><h1>Trips & Groups</h1><div className="sub">Each trip keeps its own expenses, balances and settlement</div></div>
-        <button className="primary" onClick={() => setOpen(true)} data-testid="new-trip"><Plus />New trip</button>
+        {owner && <button className="primary" onClick={() => setOpen(true)} data-testid="new-trip"><Plus />New trip</button>}
       </div>
-      {active.length === 0 && <Empty title="No trips yet">Create one to keep a trip's expenses separate from everything else.</Empty>}
+      {active.length === 0 && <Empty title="No trips yet">{owner ? "Create one to keep a trip's expenses separate from everything else." : 'Trips you are added to show up here.'}</Empty>}
       <div className="trip-grid">{active.map((t) => <TripCard key={t.id} trip={t} />)}</div>
       {archived.length > 0 && (
         <details>
@@ -293,7 +293,7 @@ export function Trips({ id, creating = false }: { id: number | null; creating?: 
           <div className="trip-grid" style={{ marginTop: 'var(--space-3)' }}>{archived.map((t) => <TripCard key={t.id} trip={t} />)}</div>
         </details>
       )}
-      {(open || creating) && <TripForm onClose={close} />}
+      {owner && (open || creating) && <TripForm onClose={close} />}
     </div>
   );
 }
