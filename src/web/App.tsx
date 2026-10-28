@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, type LucideIcon } from 'lucide-react';
+import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import type { TxInput, Tx } from '../engine/index.ts';
 import { LedgerProvider, useLedger } from './store.tsx';
 import { useRoute } from './router.tsx';
@@ -8,7 +8,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { Overview } from './pages/Overview.tsx';
 import { Trips } from './pages/Trips.tsx';
 import { Transactions } from './pages/Transactions.tsx';
-import { People } from './pages/People.tsx';
+import { People, PersonView } from './pages/People.tsx';
 import { Accounts } from './pages/Accounts.tsx';
 import { Balances } from './pages/Balances.tsx';
 import { Imports } from './pages/Imports.tsx';
@@ -55,6 +55,9 @@ function Shell() {
   const [account, setAccount] = useState(false);
   const [simple, toggleSimple] = useSimple();
   const [scope, setScope] = useState('');
+  const [menu, setMenu] = useState(false);
+  useEffect(() => setMenu(false), [path]);
+  useEffect(() => { document.body.style.overflow = menu ? 'hidden' : ''; return () => { document.body.style.overflow = ''; }; }, [menu]);
   const open: OpenTxForm = (opts = {}) => setForm(opts);
 
   // "N" opens the form from anywhere, unless the user is typing or a dialog is already up.
@@ -74,7 +77,7 @@ function Shell() {
     switch (section) {
       case 'trips': return <Trips id={id} creating={path === '/trips/new'} />;
       case 'transactions': return <Transactions />;
-      case 'people': return <People />;
+      case 'people': return id != null && !Number.isNaN(id) ? <PersonView id={id} /> : <People />;
       case 'accounts': return <Accounts id={id} />;
       case 'balances': return <Balances />;
       case 'imports': return <Imports />;
@@ -102,6 +105,8 @@ function Shell() {
       <div className="app">
         <aside className="sidebar">
           <a className="brand" href="#/"><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></a>
+          <button className="ghost icon hamburger" onClick={() => setMenu((o) => !o)} aria-label={menu ? 'Close menu' : 'Open menu'} aria-expanded={menu} data-testid="hamburger">{menu ? <X /> : <Menu />}</button>
+          <div className={`side-body${menu ? ' open' : ''}`}>
           <nav className="nav" aria-label="Sections">
             {NAV.map(([p, label, I]) => (
               <a key={p} href={`#/${p}`} className={section === p ? 'active' : ''} title={label} aria-label={label}><I /><span className="label">{label}</span></a>
@@ -130,6 +135,7 @@ function Shell() {
                 <button className="ghost icon small" onClick={() => void logout()} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>
               </div>
             )}
+          </div>
           </div>
         </aside>
         <main className="main">{page}</main>

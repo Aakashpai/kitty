@@ -22,17 +22,20 @@ export function txWho(tx: Tx, l: Ledger): string {
 }
 
 /** What this transaction means for "me": cost (negative) or money in (positive). */
-export function myImpact(tx: Tx, l: Ledger): { amount: number; currency: string; label: string } | null {
-  const me = l.me.id;
+export function myImpact(tx: Tx, l: Ledger, as: number = l.me.id): { amount: number; currency: string; label: string } | null {
+  const me = as;
+  const you = as === l.me.id;
+  const n = you ? 'you' : l.who(as);
+  const own = you ? 'your' : `${n}'s`;
   switch (tx.type) {
     case 'expense':
     case 'refund': {
       const s = shareOf(tx, me);
-      return s ? { amount: -s, currency: tx.currency, label: 'your share' } : null;
+      return s ? { amount: -s, currency: tx.currency, label: `${own} share` } : null;
     }
     case 'repayment':
-      if (tx.payer_id === me) return { amount: -tx.amount, currency: tx.currency, label: 'you paid' };
-      if (tx.payee_id === me) return { amount: tx.amount, currency: tx.currency, label: 'you received' };
+      if (tx.payer_id === me) return { amount: -tx.amount, currency: tx.currency, label: `${n} paid` };
+      if (tx.payee_id === me) return { amount: tx.amount, currency: tx.currency, label: `${n} received` };
       return null;
     case 'income':
       return tx.payer_id === me ? { amount: tx.amount, currency: tx.currency, label: 'income' } : null;
@@ -41,13 +44,13 @@ export function myImpact(tx: Tx, l: Ledger): { amount: number; currency: string;
   }
 }
 
-export function TxList({ txs, onSelect, showTrip = true }: { txs: Tx[]; onSelect: (tx: Tx) => void; showTrip?: boolean }) {
+export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSelect: (tx: Tx) => void; showTrip?: boolean; as?: number }) {
   const l = useLedger();
   if (!txs.length) return <Empty title="Nothing here yet">Transactions you record will show up in this list.</Empty>;
   return (
     <div className="txlist" data-testid="tx-list">
       {txs.map((tx) => {
-        const mine = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l);
+        const mine = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l, as);
         const trip = tx.trip_id != null ? l.trips.get(tx.trip_id) : null;
         const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, showTrip && trip?.name].filter(Boolean).join(' · ');
         return (

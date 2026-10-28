@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Copy, MoreHorizontal, Plus, UserPlus } from 'lucide-react';
+import { ChevronLeft, Copy, Link2, MoreHorizontal, Plus, UserPlus } from 'lucide-react';
 import { computeHomeBalances, formatAmount, pairwiseDebts, type Invite, type Person } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { copyText, useLedger } from '../store.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
 import { ShareModal } from './Trips.tsx';
+import { SimpleView } from './Simple.tsx';
 
 export function People() {
   const { state, balances, reload, me, user, rateCtx } = useLedger();
@@ -82,7 +83,7 @@ export function People() {
                     </form>
                   ) : (
                     <div className="title">
-                      {p.name}
+                      <a href={`#/people/${p.id}`} className="person-link" data-testid={`open-person-${p.id}`}>{p.name}</a>
                       {p.is_me ? <span className="badge">you</span> : null}
                       {u && <span className="badge">can sign in</span>}
                       {inv && <span className="badge">invited</span>}
@@ -161,6 +162,29 @@ export function People() {
         </div>
       )}
       {sharing && <ShareModal person={sharing} onClose={() => setSharing(null)} />}
+    </div>
+  );
+}
+
+/** What one person sees on their share link, for the admin: only their entries, their share, where they stand. */
+export function PersonView({ id }: { id: number }) {
+  const { people } = useLedger();
+  const [scope, setScope] = useState('');
+  const [share, setShare] = useState(false);
+  const p = people.get(id);
+  if (!p) return <Empty title="Person not found"><a href="#/people">Back to people</a></Empty>;
+  return (
+    <div className="stack">
+      <div className="page-head">
+        <div>
+          <a href="#/people" className="back"><ChevronLeft />All people</a>
+          <h1 className="row" style={{ gap: 10 }}><Avatar id={p.id} name={p.name} small />{p.name}</h1>
+          <div className="sub">{p.is_me ? 'Your own entries and where you stand' : `What ${p.name} sees on their link: only their entries, their share, and what they owe or are owed`}</div>
+        </div>
+        {!p.is_me && <button onClick={() => setShare(true)} data-testid="share-person-page"><Link2 />Share their view</button>}
+      </div>
+      <div className="simple-wrap"><SimpleView scope={scope} onScope={setScope} focus={p.id} /></div>
+      {share && <ShareModal person={p} onClose={() => setShare(false)} />}
     </div>
   );
 }
