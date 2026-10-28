@@ -157,6 +157,7 @@ export interface LedgerCtx {
 export interface Settings {
   home_currency: string;
   rates: Record<string, number>; // e.g. { SGD: 75, MYR: 24.5 } = home-currency value of one unit
+  shortcut_link?: string | null; // iCloud link to the Apple Pay shortcut, so friends can install it in one tap
 }
 
 export interface UserPublic {

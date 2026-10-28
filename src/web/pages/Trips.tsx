@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Banknote, ChevronLeft, Copy, Link2, Lock, LockOpen, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Banknote, ChevronLeft, Copy, Link2, Lock, LockOpen, Pencil, Plus, Smartphone, Trash2 } from 'lucide-react';
 import { computeBalances, formatAmount, homeSpendingBy, parseAmount, shareOf, spendingBy, toMajor, type Id, type Person, type Share, type Trip, type TripBudget, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { CATEGORIES, COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
@@ -11,6 +11,7 @@ import { BalancesView } from '../components/BalancesView.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
 import { Avatar, BudgetBar, CategoryGlyph, DangerButton, TripMark, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
+import { ShortcutSetup } from '../components/ShortcutSetup.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
@@ -57,7 +58,7 @@ function TripForm({ existing, onClose }: { existing?: Trip; onClose: () => void 
         <div className="form-grid">
           <Field label="Name" className="span-2"><input value={t.name} autoFocus placeholder="Singapore 2026" onChange={(e) => setT({ ...t, name: e.target.value })} data-testid="trip-name" /></Field>
           <Field label="Start"><input type="date" value={t.start_date ?? ''} onChange={(e) => setT({ ...t, start_date: e.target.value || null })} /></Field>
-          <Field label="End"><input type="date" value={t.end_date ?? ''} onChange={(e) => setT({ ...t, end_date: e.target.value || null })} /></Field>
+          <Field label="End" hint="The dates also tell the Apple Pay shortcut when to ask"><input type="date" value={t.end_date ?? ''} onChange={(e) => setT({ ...t, end_date: e.target.value || null })} /></Field>
           <Field label="Main currency" hint="Default for new expenses on this trip">
             <input list="currencies" value={t.currency} maxLength={3} onChange={(e) => setT({ ...t, currency: e.target.value.toUpperCase() })} data-testid="trip-currency" />
             <datalist id="currencies">{COMMON_CURRENCIES.map((c) => <option key={c} value={c} />)}</datalist>
@@ -323,6 +324,7 @@ function TripDetail({ trip }: { trip: Trip }) {
   const [edit, setEdit] = useState(false);
   const [share, setShare] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [applePay, setApplePay] = useState(false);
   const [busy, run] = useBusy();
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
   // Closing locks a settled trip so nobody shifts old balances by accident; only the owner can reopen it.
@@ -348,6 +350,7 @@ function TripDetail({ trip }: { trip: Trip }) {
           <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
         </div>
         <div className="row">
+          <button onClick={() => setApplePay(true)} data-testid="apple-pay"><Smartphone />Apple Pay</button>
           <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>
           {owner && <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>}
           {owner && <button disabled={busy} onClick={() => setClosed(trip.closed ? 0 : 1)} data-testid="close-trip">{trip.closed ? <><LockOpen />Reopen</> : <><Lock />Close trip</>}</button>}
@@ -363,6 +366,7 @@ function TripDetail({ trip }: { trip: Trip }) {
       )}
       {edit && <TripForm existing={trip} onClose={() => setEdit(false)} />}
       {share && <ShareModal trip={trip} onClose={() => setShare(false)} />}
+      {applePay && <Modal title="Apple Pay → Kitty" onClose={() => setApplePay(false)}><ShortcutSetup trip={trip} /></Modal>}
     </div>
   );
 }

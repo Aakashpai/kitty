@@ -196,6 +196,15 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+  `
+  CREATE TABLE api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT
+  );
+  `,
 ];
 
 const parseBudget = (v: unknown): TripBudget | null => {
@@ -401,7 +410,7 @@ export async function openDb(url: string, authToken?: string) {
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const state: LedgerState = {
-        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {} },
+        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {}, shortcut_link: setting('shortcut_link') ?? null },
         people: rows<Person>(5),
         accounts: rows<Account>(6),
         trips,
@@ -658,6 +667,17 @@ export async function openDb(url: string, authToken?: string) {
       people: new Map((await t.all<{ id: Id; name: string }>('SELECT id, name FROM people')).map((p) => [p.id, p.name])),
       trips: new Map((await t.all<{ id: Id; name: string }>('SELECT id, name FROM trips')).map((p) => [p.id, p.name])),
     })),
+    // Shortcut keys: only a hash is stored, so the key itself exists on the phone alone.
+    createKey: (userId: Id, tokenHash: string) => read(async (t) => (await t.get<{ id: Id; created_at: string }>('INSERT INTO api_keys (user_id, token_hash) VALUES (?, ?) RETURNING id, created_at', [userId, tokenHash]))!),
+    listKeys: (userId: Id) => read((t) => t.all<{ id: Id; created_at: string; last_used_at: string | null }>('SELECT id, created_at, last_used_at FROM api_keys WHERE user_id = ? ORDER BY id DESC', [userId])),
+    deleteKey: (id: Id, userId: Id) => read(async (t) => {
+      if (!(await t.run('DELETE FROM api_keys WHERE id = ? AND user_id = ?', [id, userId])).changes) throw new HttpError(404, 'Key not found');
+    }),
+    userByKey: (tokenHash: string) => read(async (t) => {
+      const u = await t.get<UserPublic>(`SELECT ${USER_COLS.split(', ').map((c) => `u.${c}`).join(', ')} FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.token_hash = ?`, [tokenHash]);
+      if (u) await t.run("UPDATE api_keys SET last_used_at = datetime('now') WHERE token_hash = ?", [tokenHash]);
+      return u;
+    }),
     markSeen: (userId: Id) => read((t) => t.run("UPDATE users SET seen_at = datetime('now') WHERE id = ?", [userId])),
 
     createReconciliation: (r: Omit<Reconciliation, 'id' | 'created_at'>) => inTx(async (t) => {
@@ -699,6 +719,7 @@ export async function openDb(url: string, authToken?: string) {
       await t.run('UPDATE shares SET created_by = NULL WHERE created_by = ?', [id]);
       await t.run('DELETE FROM invites WHERE created_by = ?', [id]);
       await t.run('DELETE FROM push_subs WHERE user_id = ?', [id]);
+      await t.run('DELETE FROM api_keys WHERE user_id = ?', [id]);
       await t.run('DELETE FROM users WHERE id = ?', [id]);
       await logIn(t, 'delete', 'user', id, `Removed access for ${u.name} (${u.email})`);
     }),

@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
-import { ACCOUNT_TYPES, normalizeTx, validateTx, type Account, type LedgerState, type Recurring, type Trip, type TripBudget, type UserPublic } from '../engine/index.ts';
+import { ACCOUNT_TYPES, allocate, formatAmount, guessCategory, normalizeTx, parseMoney, validateTx, type Account, type LedgerState, type Recurring, type Trip, type TripBudget, type UserPublic } from '../engine/index.ts';
 import { HttpError, involves, openDb, type Db } from './db.ts';
-import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, verifyPassword } from './auth.ts';
+import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
 import { announce, publicKey } from './push.ts';
 
@@ -16,7 +16,7 @@ interface Ctx {
   user: UserPublic | null;
 }
 type Handler = (c: Ctx) => unknown;
-type Access = 'public' | 'user' | 'owner';
+type Access = 'public' | 'user' | 'owner' | 'key'; // key: a signed-in session or a Shortcut key (Authorization: Bearer)
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' };
 /** A reply that is not JSON (receipt photos). */
 class Raw {
@@ -240,6 +240,11 @@ export async function createApp(opts: AppOptions) {
   route('PUT', '/api/settings', 'owner', async (c) => {
     if (c.body.home_currency !== undefined) await db.setSetting('home_currency', currency(c.body.home_currency));
     if (c.body.rates !== undefined) await db.setSetting('rates', JSON.stringify(rates(c.body.rates) ?? {}));
+    if (c.body.shortcut_link !== undefined) {
+      const link = optStr(c.body.shortcut_link);
+      if (link && !/^https:\/\/www\.icloud\.com\/shortcuts\/[A-Za-z0-9]+$/.test(link)) throw new HttpError(400, 'Paste the iCloud link from Shortcuts (https://www.icloud.com/shortcuts/…)');
+      await db.setSetting('shortcut_link', link ?? '');
+    }
     return { ok: true };
   });
 
@@ -332,6 +337,52 @@ export async function createApp(opts: AppOptions) {
     return (await db.deleteComment(Number(c.params.id)), { ok: true });
   });
 
+  // --- Apple Pay → Kitty (iPhone Shortcuts "Transaction" automation) --------------------------
+  route('GET', '/api/keys', 'user', (c) => db.listKeys(c.user!.id));
+  route('POST', '/api/keys', 'user', async (c) => {
+    const token = `kitty_${randomToken(24)}`;
+    return { ...(await db.createKey(c.user!.id, tokenHash(token))), token }; // shown once; only the hash is kept
+  });
+  route('DELETE', '/api/keys/:id', 'user', async (c) => (await db.deleteKey(Number(c.params.id), c.user!.id), { ok: true }));
+  /**
+   * Called on every Apple Pay tap. Without `action` it says whether to ask (only on the dates of an open trip you are on)
+   * and what to ask; with action split / mine it records the expense, with edit it returns a link to the prefilled form.
+   * Replies to an action are plain text so the Shortcut can show them as a notification as they are.
+   */
+  route('POST', '/api/shortcut', 'key', async (c) => {
+    const user = c.user!;
+    const pid = user.person_id;
+    const state = await ctxOf(user);
+    const day = /^\d{4}-\d{2}-\d{2}/.exec(String(c.body.date ?? ''))?.[0] ?? new Date().toISOString().slice(0, 10); // the phone's local date
+    const action = String(c.body.action ?? '').trim().toLowerCase();
+    const text = (s: string) => new Raw('text/plain; charset=utf-8', Buffer.from(s));
+    const live = state.trips.filter((t) => !t.closed && !t.archived && pid != null && t.members.includes(pid) && t.start_date && t.end_date && t.start_date <= day && day <= t.end_date);
+    if (!live.length) return action ? text('') : { ask: 'no' };
+    const money = parseMoney(String(c.body.amount ?? ''), live[0]!.currency);
+    if (!money) return action ? text('Kitty could not read that amount. Add it in the app.') : { ask: 'no' };
+    const trip = live.find((t) => t.currency === money.currency) ?? live[0]!;
+    const merchant = String(c.body.merchant ?? '').trim().slice(0, 100) || 'Apple Pay';
+    const label = `${formatAmount(money.amount, money.currency)} at ${merchant}`;
+    const category = guessCategory(merchant);
+    if (!action) return { ask: 'yes', prompt: `${label}: add to ${trip.name}?`, trip: trip.name };
+    if (action.startsWith('skip')) return text('');
+    if (action.startsWith('edit')) {
+      const origin = `${String(c.req.headers['x-forwarded-proto'] ?? 'http').split(',')[0]}://${c.req.headers.host}`;
+      return text(`${origin}/#/add?${new URLSearchParams({ amount: String(money.amount), currency: money.currency, description: merchant, trip: String(trip.id), date: day, ...(category ? { category } : {}) })}`);
+    }
+    const mine = action.startsWith('just') || action === 'mine';
+    if (!mine && !action.startsWith('split')) throw new HttpError(400, 'Choice must be split, mine, edit or skip');
+    const people = mine ? [pid!] : trip.members;
+    const shares = allocate(money.amount, people.map(() => 1));
+    const card = optStr(c.body.card)?.slice(0, 60);
+    const tx = normalizeTx({ type: 'expense', date: day, description: merchant, category, trip_id: trip.id, currency: money.currency, amount: money.amount, payer_id: pid, split_method: 'equal', splits: people.map((p, i) => ({ person_id: p, amount: shares[i], input: null })), notes: `From Apple Pay${card ? ` (${card})` : ''}` });
+    const errors = validateTx(tx, state);
+    if (errors.length) return text(`Not added: ${errors[0]}`);
+    const saved = await db.createTx(tx, pid);
+    await announce(db, user, saved, 'added');
+    return text(`Added to ${trip.name}: ${label}${mine ? ', just you' : `, split ${people.length} ways`}`);
+  });
+
   route('GET', '/api/push/key', 'user', async () => ({ key: await publicKey(db) }));
   route('POST', '/api/push', 'user', async (c) => {
     const keys = (c.body.keys ?? {}) as { p256dh?: unknown; auth?: unknown };
@@ -397,7 +448,9 @@ export async function createApp(opts: AppOptions) {
         if (!r) return send(404, { error: 'Not found' });
         const session = readSession(secret, parseCookies(req.headers.cookie)[COOKIE]);
         const row = session ? await db.getUserAuth(session.uid) : undefined;
-        const user: UserPublic | null = row && passwordFingerprint(row.password_hash) === session!.fp ? (({ password_hash: _p, ...pub }) => pub)(row) : null;
+        let user: UserPublic | null = row && passwordFingerprint(row.password_hash) === session!.fp ? (({ password_hash: _p, ...pub }) => pub)(row) : null;
+        const bearer = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization ?? ''))?.[1];
+        if (!user && r.access === 'key' && bearer) user = (await db.userByKey(tokenHash(bearer))) ?? null;
         if (r.access !== 'public' && !user) return send(401, { error: 'Sign in to continue', code: 'unauthenticated' });
         if (r.access === 'owner' && user?.role !== 'owner') return send(403, { error: 'Only the owner can do that' });
         const m = r.re.exec(url.pathname)!;

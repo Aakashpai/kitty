@@ -27,6 +27,25 @@ const SYMBOLS: Record<string, string> = {
 /** "₹", "S$", "RM"…; the ISO code for anything without an unambiguous symbol. */
 export const currencySymbol = (currency: string): string => SYMBOLS[currency.toUpperCase()] ?? currency;
 
+const DOLLARS = /^(SGD|AUD|CAD|HKD|NZD|TWD|USD)$/;
+/**
+ * Money as a phone writes it ("S$12.50", "SGD 12.50", "RM 22.50", "₹1,234", "12,50 €", "Rp 50.000") -> minor units and
+ * currency. A bare "$" (or no sign at all) means `fallback` when that is a dollar currency, else USD (or `fallback`).
+ */
+export function parseMoney(text: string, fallback: string): { amount: number; currency: string } | null {
+  const t = text.replace(/\u00a0/g, ' ').trim();
+  const code = /\b([A-Z]{3})\b/.exec(t)?.[1];
+  const sign = Object.entries(SYMBOLS).sort((a, b) => b[1].length - a[1].length).find(([, s]) => t.includes(s));
+  const currency = code ?? (sign ? (sign[1] === '$' && DOLLARS.test(fallback) ? fallback : sign[0]) : fallback);
+  let n = /\d[\d.,\s]*/.exec(t)?.[0].replace(/\s/g, '') ?? '';
+  const dot = n.lastIndexOf('.'), comma = n.lastIndexOf(',');
+  if (dot >= 0 && comma >= 0) n = dot > comma ? n.replace(/,/g, '') : n.replace(/\./g, '').replace(',', '.'); // 1,234.56 / 1.234,56
+  else if (comma >= 0) n = /,\d{1,2}$/.test(n) ? n.replace(',', '.') : n.replace(/,/g, ''); // 12,50 / 1,234
+  else if (/^\d{1,3}(\.\d{3})+$/.test(n) && decimalsOf(currency) !== 3) n = n.replace(/\./g, ''); // Rp 50.000
+  const amount = parseAmount(n, currency);
+  return amount != null && amount > 0 ? { amount, currency } : null;
+}
+
 /** 123450 -> "S$1,234.50", "RM 1,234.50", "AED 1,234.50". Pass withSymbol=false for a bare "1,234.50". */
 export function formatAmount(minor: number, currency: string, withSymbol = true): string {
   const d = decimalsOf(currency);

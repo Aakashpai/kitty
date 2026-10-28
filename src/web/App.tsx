@@ -4,7 +4,7 @@ import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Menu,
 import type { TxInput, Tx } from '../engine/index.ts';
 import { dropQueued, flushQueue, queued } from './api.ts';
 import { LedgerProvider, useLedger } from './store.tsx';
-import { useRoute } from './router.tsx';
+import { navigate, useRoute } from './router.tsx';
 import { TxForm } from './components/TxForm.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { Overview } from './pages/Overview.tsx';
@@ -74,6 +74,18 @@ function Shell() {
   useEffect(() => setMenu(false), [path]);
   useEffect(() => { document.body.style.overflow = menu ? 'hidden' : ''; return () => { document.body.style.overflow = ''; }; }, [menu]);
   const open: OpenTxForm = (opts = {}) => { setForm(opts); setFormKey((k) => k + 1); };
+
+  // "#/add?amount=1250&currency=SGD&…" is the Apple Pay shortcut's "Edit in Kitty": open the add form filled in, then show the trip.
+  useEffect(() => {
+    if (!path.startsWith('/add')) return;
+    const q = new URLSearchParams(path.split('?')[1] ?? '');
+    const trip = Number(q.get('trip')) || null;
+    const initial: Partial<TxInput> = { type: 'expense', trip_id: trip, amount: Number(q.get('amount')) || 0, description: q.get('description') ?? '' };
+    for (const k of ['currency', 'date', 'category'] as const) { const v = q.get(k); if (v) initial[k] = v; }
+    setForm(initial.amount ? { initial } : {});
+    setFormKey((k) => k + 1);
+    navigate(trip ? `/trips/${trip}` : '/');
+  }, [path]);
 
   // "N" opens the form from anywhere, unless the user is typing or a dialog is already up.
   useEffect(() => {

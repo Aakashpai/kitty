@@ -16,6 +16,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 export const randomToken = (bytes = 24) => randomBytes(bytes).toString('base64url');
+/** Shortcut keys are stored only as this hash; the key itself lives on the phone. */
+export const tokenHash = (token: string) => createHash('sha256').update(token).digest('base64url');
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64url');
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('base64url');
