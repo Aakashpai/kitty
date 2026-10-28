@@ -322,7 +322,8 @@ export async function openDb(url: string, authToken?: string) {
     url,
     isLocal: isLocal(url),
     close: () => client.close(),
-    ping: () => read((t) => t.get('SELECT 1 AS ok')),
+    // Reads a real row, not just SELECT 1: the cron in vercel.json (days 1, 10, 19, 28; never more than 9 days apart) calls this so Turso's free plan, which archives after 10 idle days, never does.
+    ping: () => read((t) => t.get("SELECT value FROM settings WHERE key = 'home_currency'")),
 
     /** One round trip for everything the client needs; the UI reloads this after every save. `materialize` first adds any repeating entries that are due. */
     loadState: async (user: UserPublic | null, materialize = false): Promise<LedgerState> => {
