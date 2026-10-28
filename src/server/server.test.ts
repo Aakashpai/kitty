@@ -176,7 +176,7 @@ test('invites: owner invites a person, invitee signs up as that person, access c
   assert.equal((await anon.call('GET', `/api/invites/${inv2.token}`)).status, 410);
 });
 
-test('share links: anyone with the link sees one trip, read-only, without account details', async () => {
+test('share links: anyone with the link sees one trip, read-only, without account balances', async () => {
   const s = await owner.state();
   const trip = s.trips[0]!;
   assert.equal((await owner.call('POST', '/api/shares', { trip_id: 9999 })).status, 404);
@@ -185,13 +185,11 @@ test('share links: anyone with the link sees one trip, read-only, without accoun
   const view = (await anon.ok('GET', `/api/shared/${share.token}`)) as unknown as LedgerState;
   assert.equal(view.user, null);
   assert.deepEqual(view.trips.map((t) => t.id), [trip.id]);
-  assert.deepEqual(view.accounts, []);
+  assert.ok(view.accounts.length > 0 && view.accounts.every((a) => a.opening_balance === 0), 'account names travel for valuing card charges, balances do not');
   assert.ok(view.transactions.length > 0);
   for (const tx of view.transactions) {
     assert.equal(tx.trip_id, trip.id);
     assert.ok(['expense', 'refund', 'repayment'].includes(tx.type), 'withdrawals and income are private');
-    assert.equal(tx.from_account_id, null);
-    assert.equal(tx.to_account_id, null);
   }
   assert.ok(!view.transactions.some((t) => t.description === 'ATM'));
   assert.equal((await anon.call('POST', '/api/transactions', {})).status, 401, 'a link never grants write access');

@@ -130,7 +130,7 @@ export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Pe
   return (
     <Modal title={`Share ${trip?.name ?? person?.name ?? ''}`} onClose={onClose}>
       <div className="stack">
-        <p className="muted small">{person ? `Anyone with the link sees only the entries ${person.name} is part of, their share of each one, and what they owe or are owed. Nothing can be edited and your accounts stay private.` : 'Anyone with a link sees this trip’s expenses, balances and settlement plan. They cannot edit anything, and your accounts stay private. Turn a link off any time.'}</p>
+        <p className="muted small">{person ? `Anyone with the link sees only the entries ${person.name} is part of, their share of each one, and what they owe or are owed, valued exactly as you see them. Nothing can be edited and your account balances stay private.` : 'Anyone with a link sees this trip’s expenses, balances and settlement plan. They cannot edit anything, and your account balances stay private. Turn a link off any time.'}</p>
         {!person && <label className="row small simple-check"><input type="checkbox" checked={simple} onChange={(e) => setSimple(e.target.checked)} data-testid="share-simple" />Copy links as the simple view (easier to read on a phone; viewers can switch)</label>}
         {links.length > 0 && (
           <div className="panel">

@@ -350,6 +350,7 @@ export async function openDb(url: string, authToken?: string) {
           { sql: `SELECT tx_id, person_id, amount, input FROM splits WHERE tx_id IN (SELECT id FROM transactions WHERE ${where}) ORDER BY person_id`, args },
           { sql: 'SELECT key, value FROM settings' },
           { sql: 'SELECT id, name, is_me, archived, upi_id FROM people ORDER BY is_me DESC, LOWER(name)' },
+          { sql: 'SELECT id, person_id, name, type, currency, archived FROM accounts ORDER BY id' },
         ], 'read');
       } catch (e) {
         throw friendly(e);
@@ -372,11 +373,11 @@ export async function openDb(url: string, authToken?: string) {
       }
       for (const tx of transactions) {
         tx.splits = byTx.get(tx.id) ?? [];
-        tx.from_account_id = tx.to_account_id = null;
-        tx.from_amount = tx.to_amount = null;
         tx.reference = tx.notes = null;
       }
       const people = rows<Person>(5);
+      // Account names and the real home-currency charge per entry stay, so the link values card spends exactly as the owner sees them; balances do not travel.
+      const accounts = rows<Account>(6).map((a) => ({ ...a, opening_balance: 0 }));
       if (personId != null) {
         if (!people.some((p) => p.id === personId)) throw new HttpError(404, 'This link no longer works');
         for (const p of people) p.is_me = p.id === personId ? 1 : 0; // the page speaks to them
@@ -386,7 +387,7 @@ export async function openDb(url: string, authToken?: string) {
       return {
         settings: { home_currency: setting('home_currency') ?? trips[0]?.currency ?? 'USD', rates: parseRates(setting('rates')) ?? {} },
         people,
-        accounts: [],
+        accounts,
         trips,
         transactions,
         reconciliations: [],

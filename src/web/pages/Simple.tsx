@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, settlementPlan, shareOf, spendingBy, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, shareOf, spendingBy, type Id, type Tx } from '../../engine/index.ts';
 import { useLedger } from '../store.tsx';
 import { TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
-import { Avatar, MoneyList } from '../components/ui.tsx';
+import { Avatar, Money, MoneyList } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
 const RECENT = 8;
@@ -23,27 +23,36 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const h = useMemo(() => computeHomeBalances(txs, rateCtx), [txs, rateCtx]);
   const home = rateCtx.home;
   const trip = /^\d+$/.test(scope) ? rateCtx.trips.find((t) => t.id === Number(scope)) : undefined;
-  const rateFor = (cur: string) => (cur === home ? 1 : (trip?.rates?.[cur] ?? rateCtx.rates[cur] ?? null));
   const myNet = b.net.get(subject) ?? new Map<string, number>();
   const myHome = h.net.get(subject)?.get(home) ?? 0;
   const foreign = txs.some((t) => t.currency !== home);
   const exact = !h.unconverted.size;
   const settled = myHome === 0 && ![...myNet.values()].some((v) => v !== 0);
-  const debts = focus != null ? pairwiseDebts(b).filter((d) => d.from === focus || d.to === focus) : settlementPlan(b.net);
   const isYou = subject === me.id;
   const name = isYou ? 'You' : who(subject);
   const own = isYou ? 'Your' : `${who(subject)}’s`;
   const myShare = new Map<string, number>();
   for (const tx of txs) { const v = shareOf(tx, subject); if (v) myShare.set(tx.currency, (myShare.get(tx.currency) ?? 0) + v); }
-  // One row per pair with every currency between them, plus a home-currency estimate when rates allow.
-  const pairs = new Map<string, { from: Id; to: Id; amounts: Map<string, number>; est: number; partial: boolean }>();
-  for (const d of debts) {
-    const key = `${d.from}-${d.to}`;
-    const p = pairs.get(key) ?? { from: d.from, to: d.to, amounts: new Map<string, number>(), est: 0, partial: false };
-    p.amounts.set(d.currency, (p.amounts.get(d.currency) ?? 0) + d.amount);
-    const r = rateFor(d.currency);
-    if (r) p.est += Math.round(d.amount * r); else p.partial = true;
-    pairs.set(key, p);
+  // Exact pair debts. The home-currency figure comes from the same calculation as the headline, so the two always agree;
+  // the per-currency pieces sit underneath (negative = owed back the other way). Without a rate for some currency, pieces only.
+  const mine = (d: { from: Id; to: Id }) => focus == null || d.from === focus || d.to === focus;
+  const rows: { from: Id; to: Id; home: number | null; parts: Map<string, number> }[] = [];
+  const addPart = (parts: Map<string, number>, cur: string, v: number) => parts.set(cur, (parts.get(cur) ?? 0) + v);
+  if (exact) {
+    for (const d of pairwiseDebts(h).filter(mine)) {
+      const parts = new Map<string, number>();
+      for (const x of pairwiseDebts(b)) {
+        if (x.from === d.from && x.to === d.to) addPart(parts, x.currency, x.amount);
+        else if (x.from === d.to && x.to === d.from) addPart(parts, x.currency, -x.amount);
+      }
+      rows.push({ from: d.from, to: d.to, home: d.amount, parts });
+    }
+  } else {
+    for (const x of pairwiseDebts(b).filter(mine)) {
+      let row = rows.find((r) => r.from === x.from && r.to === x.to);
+      if (!row) rows.push((row = { from: x.from, to: x.to, home: null, parts: new Map() }));
+      addPart(row.parts, x.currency, x.amount);
+    }
   }
   const spend = spendingBy(txs, () => 'all').get('all') ?? new Map<string, number>();
   const Person = ({ id }: { id: Id }) => <span className="who"><Avatar id={id} name={people.get(id)?.name ?? '?'} small />{who(id)}</span>;
@@ -61,11 +70,14 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
       <section>
         <h2>Settle up</h2>
         <div className="panel" data-testid="simple-settle">
-          {pairs.size === 0 && <div className="simple-row muted">Nobody owes anyone anything.</div>}
-          {[...pairs.values()].map((p) => (
+          {rows.length === 0 && <div className="simple-row muted">Nobody owes anyone anything.</div>}
+          {rows.map((p) => (
             <div className="simple-row" key={`${p.from}-${p.to}`}>
               <span className="pair"><Person id={p.from} /><span className="arrow"><ArrowRight /></span><Person id={p.to} /></span>
-              <span className="amt"><MoneyList map={p.amounts} />{p.est && [...p.amounts.keys()].some((c) => c !== home) ? <span className="faint small">≈ {formatAmount(p.est, home)}{p.partial ? ' + more' : ''}</span> : null}</span>
+              <span className="amt">
+                {p.home != null ? <Money amount={p.home} currency={home} /> : <MoneyList map={p.parts} />}
+                {p.home != null && [...p.parts.keys()].some((c) => c !== home) ? <span className="faint small"><MoneyList map={p.parts} /></span> : null}
+              </span>
             </div>
           ))}
         </div>
