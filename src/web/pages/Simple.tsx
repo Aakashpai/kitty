@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
 import { useLedger } from '../store.tsx';
-import { TxList } from '../components/TxList.tsx';
+import { ExportButton, TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
 import { Avatar, Money, MoneyList } from '../components/ui.tsx';
@@ -87,7 +87,7 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
         <CategorySpend txs={txs} budget={focus == null ? trip?.budget : null} person={readOnly && focus == null ? undefined : subject} label={isYou ? 'You' : who(subject)} everyone={focus == null} compact selected={cat?.label ?? null} onSelect={setCat} />
       </section>
       <section>
-        <div className="row between"><h2>{cat ? cat.label : showAll ? 'All entries' : 'Latest'}</h2>{listed.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${listed.length}`}</button>}</div>
+        <div className="row between"><h2>{cat ? cat.label : showAll ? 'All entries' : 'Latest'}</h2><span className="row">{listed.length > RECENT && <button className="ghost small" onClick={() => setShowAll((v) => !v)} data-testid="simple-more">{showAll ? 'Show fewer' : `Show all ${listed.length}`}</button>}<ExportButton txs={listed} title={[focus != null ? who(subject) : '', trip?.name ?? '', cat?.label ?? ''].filter(Boolean).join(' ') || 'Kitty'} /></span></div>
         <div className="panel"><TxList txs={recent} showTrip={!trip} onSelect={setSelected} as={subject} /></div>
       </section>
       {selected && <TxDetail tx={selected} onClose={() => setSelected(null)} />}

@@ -5,7 +5,7 @@ import { api, errorText } from '../api.ts';
 import { CATEGORIES, COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
-import { TxList } from '../components/TxList.tsx';
+import { ExportButton, TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { BalancesView } from '../components/BalancesView.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
@@ -284,7 +284,12 @@ export function TripView({ trip }: { trip: Trip }) {
       <div className="tabs">
         {(['transactions', 'categories', 'days', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
-      {tab === 'transactions' && <div className="panel"><TxList txs={txs} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>}
+      {tab === 'transactions' && (
+        <div className="stack tight">
+          <div className="row end"><ExportButton txs={txs} title={trip.name} /></div>
+          <div className="panel"><TxList txs={txs} showTrip={false} onSelect={(tx: Tx) => setSelected(tx.id)} /></div>
+        </div>
+      )}
       {tab === 'categories' && (
         <div className="stack">
           <CategorySpend txs={txs} person={readOnly ? undefined : me.id} budget={trip.budget} selected={cat?.label ?? null} onSelect={setCat} />

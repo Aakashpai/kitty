@@ -1,6 +1,7 @@
 import { shareOf, type Tx } from '../../engine/index.ts';
 import { useLedger, type Ledger } from '../store.tsx';
-import { MessageCircle, Paperclip } from 'lucide-react';
+import { Download, MessageCircle, Paperclip } from 'lucide-react';
+import { exportEntries } from './exportCsv.ts';
 import { Empty, Money, TYPE_LABEL, TypeIcon, fmtShort } from './ui.tsx';
 
 export function txWho(tx: Tx, l: Ledger): string {
@@ -43,6 +44,12 @@ export function myImpact(tx: Tx, l: Ledger, as: number = l.me.id): { amount: num
     default:
       return tx.fee_amount ? { amount: -tx.fee_amount, currency: tx.currency, label: 'fee' } : null;
   }
+}
+
+/** Downloads exactly these entries as a spreadsheet Excel opens (one column per person's share). */
+export function ExportButton({ txs, title }: { txs: Tx[]; title: string }) {
+  const l = useLedger();
+  return <button className="ghost small" disabled={!txs.length} onClick={() => exportEntries(txs, l, title)} title="Download these entries for Excel" data-testid="export-excel"><Download />Excel</button>;
 }
 
 export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSelect: (tx: Tx) => void; showTrip?: boolean; as?: number }) {

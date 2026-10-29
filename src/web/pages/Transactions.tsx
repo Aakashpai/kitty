@@ -4,7 +4,7 @@ import { TX_TYPES, type Tx, type TxType } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
-import { TxList } from '../components/TxList.tsx';
+import { ExportButton, TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { DangerButton, ErrorBox, Field, Money, TYPE_LABEL, TripMark, TypeIcon, fmtDate, hueStyle } from '../components/ui.tsx';
 
@@ -67,7 +67,10 @@ export function Transactions() {
     <div className="stack">
       <div className="page-head">
         <div><h1>Transactions</h1><div className="sub">{txs.length} of {state.transactions.length}{scopedTrip ? ` · ${scopedTrip.name}` : scope === 'none' ? ' · personal only' : ''}</div></div>
-        <button className="primary" onClick={() => openForm(scopedTrip ? { initial: { trip_id: scopedTrip.id, currency: scopedTrip.currency } } : {})}><Plus />Add transaction</button>
+        <div className="row">
+          <ExportButton txs={txs} title={scopedTrip ? scopedTrip.name : 'Transactions'} />
+          <button className="primary" onClick={() => openForm(scopedTrip ? { initial: { trip_id: scopedTrip.id, currency: scopedTrip.currency } } : {})}><Plus />Add transaction</button>
+        </div>
       </div>
       {(state.recurring ?? []).length > 0 && (
         <div className="panel" data-testid="recurring-panel">

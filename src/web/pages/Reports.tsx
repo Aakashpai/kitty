@@ -1,24 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
 import { Database, Download, Eraser, Upload } from 'lucide-react';
-import { effectsOf, formatAmount, homeValue, shareOf, spendingBy, toMajor, type Tx } from '../../engine/index.ts';
+import { effectsOf, formatAmount, homeValue, shareOf, spendingBy, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { categoryOf, useLedger } from '../store.tsx';
 import { CategoryGlyph, DangerButton, ErrorBox, Field, Money, MoneyList, Spinner, Stat, useBusy } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
+import { download, exportEntries } from '../components/exportCsv.ts';
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
-const download = (name: string, content: string, type: string) => {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type }));
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(a.href);
-};
-const csvCell = (v: unknown) => {
-  const s = v == null ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
 /** One row per key; each currency gets its own meter scaled to that currency's largest row. */
 function GroupTable({ title, groups, note, icons = false }: { title: string; groups: Map<string, Map<string, number>>; note?: string; icons?: boolean }) {
   const rows = [...groups].sort(([a], [b]) => a.localeCompare(b));
@@ -54,7 +43,8 @@ function GroupTable({ title, groups, note, icons = false }: { title: string; gro
 }
 
 export function Reports() {
-  const { state, me, who, accountName, trips, reload, rateCtx, owner } = useLedger();
+  const l = useLedger();
+  const { state, me, who, trips, reload, rateCtx, owner } = l;
   const [scope, setScope] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -94,17 +84,7 @@ export function Reports() {
   const byMonth = spendingBy(txs, (t) => t.date.slice(0, 7));
   const byPayer = spendingBy(txs.filter((t) => t.type === 'expense' || t.type === 'refund'), (t) => who(t.payer_id));
 
-  const exportCsv = () => {
-    const head = ['id', 'date', 'type', 'description', 'category', 'trip', 'currency', 'amount', 'payer', 'payee', 'from_account', 'from_amount', 'to_account', 'to_amount', 'fee', 'settled_amount', 'settled_currency', 'linked_tx_id', 'method', 'reference', 'notes', 'splits'];
-    const line = (t: Tx) => [
-      t.id, t.date, t.type, t.description, t.category, t.trip_id != null ? trips.get(t.trip_id)?.name : '', t.currency, toMajor(t.amount, t.currency), who(t.payer_id), t.payee_id != null ? who(t.payee_id) : '',
-      t.from_account_id != null ? accountName(t.from_account_id) : '', t.from_amount != null ? toMajor(t.from_amount, state.accounts.find((a) => a.id === t.from_account_id)?.currency ?? t.currency) : '',
-      t.to_account_id != null ? accountName(t.to_account_id) : '', t.to_amount != null ? toMajor(t.to_amount, state.accounts.find((a) => a.id === t.to_account_id)?.currency ?? t.currency) : '',
-      t.fee_amount != null ? toMajor(t.fee_amount, t.currency) : '', t.settled_amount != null ? toMajor(t.settled_amount, t.settled_currency ?? t.currency) : '', t.settled_currency, t.linked_tx_id, t.method, t.reference, t.notes,
-      t.splits.map((s) => `${who(s.person_id)}=${toMajor(s.amount, t.currency)}`).join('; '),
-    ].map(csvCell).join(',');
-    download(`ledger-transactions-${new Date().toISOString().slice(0, 10)}.csv`, [head.join(','), ...txs.map(line)].join('\n'), 'text/csv');
-  };
+  const exportCsv = () => exportEntries(txs, l, `Kitty ${from || 'start'} to ${to || 'today'}`);
   const backup = () => run(async () => {
     try {
       const data = await api('GET', '/api/backup');
@@ -161,7 +141,7 @@ export function Reports() {
         <div className="panel-head"><h3>Exports, backup & restore</h3></div>
         <div className="panel-body stack">
           <div className="row">
-            <button onClick={exportCsv} data-testid="export-csv"><Download />CSV of this range</button>
+            <button onClick={exportCsv} data-testid="export-csv"><Download />Excel (CSV) of this range</button>
             {owner && <>
               <button disabled={busy} onClick={() => void backup()} data-testid="download-backup">{busy ? <Spinner /> : <Download />}Full backup (JSON)</button>
               <button disabled={busy} onClick={() => void snapshot()}><Database />Snapshot database file</button>
