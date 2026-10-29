@@ -422,7 +422,6 @@ details[open] summary::before { transform: rotate(90deg); }
   .page-head { margin-bottom: var(--space-4); }
   .panel-head, .panel-body { padding-left: 14px; padding-right: 14px; }
   .txrow { padding: 9px 12px; }
-  .txrow .sub-label { display: none; }
 }
 
 /* ---------- auth, status, sharing ---------- */
@@ -586,3 +585,9 @@ td .who { flex-wrap: wrap; white-space: normal; }
 .plan-add { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
 .plan-add input { flex: 1; min-width: 0; height: 32px; }
 .plan .info-box select { height: 30px; font-size: 13px; width: auto; }
+
+/* what an entry did to the reader's balance, in words, under the title */
+.txrow .impact { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; white-space: normal; }
+.txrow .impact .money { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.txrow .impact.pos .money { color: var(--pos); }
+.txrow .impact.neg .money { color: var(--neg); }

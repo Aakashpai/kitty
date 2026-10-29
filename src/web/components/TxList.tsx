@@ -1,4 +1,4 @@
-import { shareOf, type Tx } from '../../engine/index.ts';
+import { formatAmount, shareOf, type Tx } from '../../engine/index.ts';
 import { useLedger, type Ledger } from '../store.tsx';
 import { Download, MessageCircle, Paperclip } from 'lucide-react';
 import { exportEntries } from './exportCsv.ts';
@@ -24,20 +24,38 @@ export function txWho(tx: Tx, l: Ledger): string {
 }
 
 /** What this transaction means for "me": cost (negative) or money in (positive). */
+/**
+ * What one entry did to `as`'s balance, in words a friend can read on their own page: who paid, whose share it was,
+ * what was paid back. Positive = money owed to them or received; negative = their cost or what they paid out.
+ */
 export function myImpact(tx: Tx, l: Ledger, as: number = l.me.id): { amount: number; currency: string; label: string } | null {
   const me = as;
   const you = as === l.me.id;
-  const n = you ? 'you' : l.who(as);
-  const own = you ? 'your' : `${n}'s`;
+  const name = you ? 'you' : l.who(as);
+  const own = you ? 'your' : `${l.who(as)}’s`;
+  const cap = (t: string) => t[0]!.toUpperCase() + t.slice(1);
   switch (tx.type) {
-    case 'expense':
+    case 'expense': {
+      const share = shareOf(tx, me);
+      if (tx.payer_id === me) {
+        const owed = tx.amount - share;
+        if (owed <= 0) return { amount: -share, currency: tx.currency, label: `${cap(name)} paid, own cost` };
+        const others = tx.splits.filter((x) => x.person_id !== me).map((x) => l.who(x.person_id));
+        return { amount: owed, currency: tx.currency, label: `owed to ${name} by ${others.length > 2 ? `${others.length} people` : others.join(' & ')}` };
+      }
+      return share ? { amount: -share, currency: tx.currency, label: `${own} share · ${l.who(tx.payer_id)} paid` } : null;
+    }
     case 'refund': {
-      const s = shareOf(tx, me);
-      return s ? { amount: -s, currency: tx.currency, label: `${own} share` } : null;
+      const share = shareOf(tx, me); // negative: money back
+      if (tx.payer_id === me) {
+        const passOn = tx.amount + share;
+        return passOn > 0 ? { amount: -passOn, currency: tx.currency, label: `${name} received it, ${formatAmount(passOn, tx.currency)} is others’` } : { amount: -share, currency: tx.currency, label: `refunded to ${name}` };
+      }
+      return share ? { amount: -share, currency: tx.currency, label: `${own} part · ${l.who(tx.payer_id)} received it` } : null;
     }
     case 'repayment':
-      if (tx.payer_id === me) return { amount: -tx.amount, currency: tx.currency, label: `${n} paid` };
-      if (tx.payee_id === me) return { amount: tx.amount, currency: tx.currency, label: `${n} received` };
+      if (tx.payer_id === me) return { amount: -tx.amount, currency: tx.currency, label: `${name} paid ${l.who(tx.payee_id)}` };
+      if (tx.payee_id === me) return { amount: tx.amount, currency: tx.currency, label: `${l.who(tx.payer_id)} paid ${name}` };
       return null;
     case 'income':
       return tx.payer_id === me ? { amount: tx.amount, currency: tx.currency, label: 'income' } : null;
@@ -71,10 +89,11 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
             <span className="body">
               <span className="title">{tx.description || TYPE_LABEL[tx.type]}</span>
               <span className="meta">{withReceipt.has(tx.id) && <Paperclip className="clip" aria-label="Has a receipt photo" />}{talk.has(tx.id) && <span className="talk" aria-label={`${talk.get(tx.id)} comments`}><MessageCircle className="clip" />{talk.get(tx.id)} </span>}{meta}</span>
+              {mine && <span className={`impact ${mine.amount > 0 ? 'pos' : mine.amount < 0 ? 'neg' : ''}`}><Money amount={mine.amount} currency={mine.currency} sign /> · {mine.label}</span>}
             </span>
             <span className="amt">
               <span className="amount"><Money amount={tx.amount} currency={tx.currency} /></span>
-              {mine ? <span className="sub"><Money amount={mine.amount} currency={mine.currency} sign /> <span className="sub-label">{mine.label}</span></span> : <span className="sub faint">{tx.type === 'transfer' || tx.type === 'withdrawal' ? 'not spending' : ''}</span>}
+              {!mine && (tx.type === 'transfer' || tx.type === 'withdrawal') && <span className="sub faint">not spending</span>}
             </span>
           </button>
         );
