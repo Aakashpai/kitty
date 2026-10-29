@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Banknote, ChevronLeft, Copy, Link2, Lock, LockOpen, Pencil, Plus, Smartphone, Trash2 } from 'lucide-react';
 import { computeBalances, formatAmount, homeSpendingBy, parseAmount, shareOf, spendingBy, toMajor, type Id, type Person, type Share, type Trip, type TripBudget, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { CATEGORIES, COMMON_CURRENCIES, copyText, featureOn, useLedger } from '../store.tsx';
+import { CATEGORIES, COMMON_CURRENCIES, copyText, featureOn, today, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
 import { ExportButton, TxList } from '../components/TxList.tsx';
@@ -242,11 +242,14 @@ function TripDays({ trip, txs, onOpen }: { trip: Trip; txs: Tx[]; onOpen: (tx: T
   );
 }
 
+/** A plan is for the future: once the last day has passed, or the trip is locked, the board steps aside. */
+const tripOver = (trip: Trip) => !!trip.closed || (!!trip.end_date && trip.end_date < today());
+
 /** Everything about one trip: members, totals, transactions, balances, per-person. Also used by shared read-only links. */
 export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareToken?: string; onRefresh?: () => Promise<void> }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
   // A trip that has no entries yet is being planned: open on the board.
-  const [tab, setTab] = useState<'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (state.transactions.some((t) => t.trip_id === trip.id) || !featureOn(state, 'plan') ? 'transactions' : 'plan'));
+  const [tab, setTab] = useState<'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (state.transactions.some((t) => t.trip_id === trip.id) || !featureOn(state, 'plan') || tripOver(trip) ? 'transactions' : 'plan'));
   const [selected, setSelected] = useState<number | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
@@ -284,9 +287,9 @@ export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareTok
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
-        {(['plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).filter((t) => t !== 'plan' || featureOn(state, 'plan')).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
+        {(['plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).filter((t) => t !== 'plan' || (featureOn(state, 'plan') && !tripOver(trip))).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
-      {tab === 'plan' && featureOn(state, 'plan') && <TripPlan trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
+      {tab === 'plan' && featureOn(state, 'plan') && !tripOver(trip) && <TripPlan trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
       {tab === 'transactions' && (
         <div className="stack tight">
           <div className="row end"><ExportButton txs={txs} title={trip.name} /></div>
@@ -335,6 +338,7 @@ function TripDetail({ trip }: { trip: Trip }) {
   const [applePay, setApplePay] = useState(false);
   const [busy, run] = useBusy();
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
+  const outside = trip.start_date && trip.end_date ? txs.filter((t) => t.date < trip.start_date! || t.date > trip.end_date!) : [];
   // Closing locks a settled trip so nobody shifts old balances by accident; only the owner can reopen it.
   const setClosed = (closed: 0 | 1) => {
     if (closed && !window.confirm(`Close ${trip.name}? Nobody can add, change or delete its entries until you reopen it. Comments and receipt photos still work.`)) return;
@@ -374,6 +378,18 @@ function TripDetail({ trip }: { trip: Trip }) {
         </div>
       ) : null}
       <ErrorBox error={err} />
+      {owner && outside.length > 0 && (
+        <div className="warn-box row between" data-testid="outside-dates">
+          <span>{outside.length} {outside.length === 1 ? 'entry is' : 'entries are'} dated outside this trip ({fmtDate(trip.start_date)} – {fmtDate(trip.end_date)}), probably placeholders from the import.</span>
+          <button className="small" disabled={busy} onClick={() => void run(async () => {
+            try {
+              for (const t of outside) await api('PUT', `/api/transactions/${t.id}`, { ...t, date: t.date < trip.start_date! ? trip.start_date : trip.end_date, notes: (t.notes ?? '').replace(/Exact day unknown[^.]*\.?\s*/i, '').trim() || null });
+              await reload();
+              setErr(null);
+            } catch (e) { setErr(errorText(e)); }
+          })}>Move them to the trip dates</button>
+        </div>
+      )}
       <TripView key={trip.id} trip={trip} />
       {owner && txs.length === 0 && (
         <div><DangerButton small={false} confirm={`Delete trip "${trip.name}"?`} onConfirm={async () => { await api('DELETE', `/api/trips/${trip.id}`); await reload(); navigate('/trips'); }}>Delete trip</DangerButton></div>
