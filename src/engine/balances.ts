@@ -102,6 +102,33 @@ export function pairwiseDebts(b: Balances): Debt[] {
 }
 
 /**
+ * Fewer payments without inventing relationships: whenever X owes Y and Y owes Z, X pays Z instead and Y's two
+ * debts shrink by the same amount (a two-person loop just cancels). Every resulting payment follows a chain of real
+ * debts, so nobody is told to pay someone they never dealt with. Everyone's net position is unchanged. Per currency;
+ * deterministic (people visited in id order, largest debts first).
+ */
+export function forwardDebts(debts: Debt[]): Debt[] {
+  const out: Debt[] = [];
+  for (const currency of [...new Set(debts.map((d) => d.currency))].sort()) {
+    const d = new Map<string, number>();
+    for (const x of debts) if (x.currency === currency && x.amount > 0) d.set(`${x.from}|${x.to}`, (d.get(`${x.from}|${x.to}`) ?? 0) + x.amount);
+    const edges = () => [...d].map(([k, v]) => { const [a, b] = k.split('|'); return { from: Number(a), to: Number(b), v }; }).sort((p, q) => q.v - p.v || p.from - q.from || p.to - q.to);
+    for (let guard = 0; guard < 10000; guard++) {
+      const e = edges();
+      const mid = [...new Set(e.map((x) => x.to))].sort((a, b) => a - b).find((y) => e.some((x) => x.from === y));
+      if (mid == null) break;
+      const inn = e.find((x) => x.to === mid)!, outn = e.find((x) => x.from === mid)!;
+      const m = Math.min(inn.v, outn.v);
+      const dec = (k: string) => { const v = (d.get(k) ?? 0) - m; if (v > 0) d.set(k, v); else d.delete(k); };
+      dec(`${inn.from}|${mid}`); dec(`${mid}|${outn.to}`);
+      if (inn.from !== outn.to) d.set(`${inn.from}|${outn.to}`, (d.get(`${inn.from}|${outn.to}`) ?? 0) + m);
+    }
+    for (const x of edges()) out.push({ from: x.from, to: x.to, currency, amount: x.v });
+  }
+  return out.sort(byDebt);
+}
+
+/**
  * Minimal set of payments that settles everyone's net position, one currency at a time.
  * Greedy largest-debtor-pays-largest-creditor; deterministic (ties broken by person id).
  */

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Copy } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, settlementPlan, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, formatAmount, forwardDebts, pairwiseDebts, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
 import { copyText, useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, Empty, Money, MoneyList } from './ui.tsx';
@@ -20,7 +20,7 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
   const b = useMemo(() => computeBalances(txs), [txs]);
   const h = useMemo(() => computeHomeBalances(txs, rateCtx), [txs, rateCtx]);
   const pairs = pairwiseDebts(b);
-  const plan = settlementPlan(b.net);
+  const plan = forwardDebts(pairs); // debts passed along real chains only; never a route between people the money did not flow through
   const home = rateCtx.home;
   const foreign = pairs.some((d) => d.currency !== home);
   const inHome = mode === 'home' && foreign;
@@ -91,7 +91,7 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
         </div>
         <div className="stack">
           <div className="panel">
-            <div className="panel-head"><h3>Simplest way to settle</h3><span className="row"><span className="faint small">{plan.length} payment{plan.length === 1 ? '' : 's'} instead of {pairs.length}</span><button className="small ghost" onClick={() => void copyRequest(allText(), -1)} data-testid="copy-all"><Copy />{copied === -1 ? 'Copied' : 'Copy all'}</button></span></div>
+            <div className="panel-head"><h3>Fewer payments</h3><span className="row"><span className="faint small">{plan.length} payment{plan.length === 1 ? '' : 's'} instead of {pairs.length}</span><button className="small ghost" onClick={() => void copyRequest(allText(), -1)} data-testid="copy-all"><Copy />{copied === -1 ? 'Copied' : 'Copy all'}</button></span></div>
             <div className="table-wrap">
               <table data-testid="settlement-plan">
                 <tbody>

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  accountEntries, allocate, computeBalances, computeHomeBalances, conversionOf, effectsOf, emptyTx, formatAmount, homeValue, normalizeTx, pairwiseDebts,
+  accountEntries, allocate, computeBalances, computeHomeBalances, conversionOf, effectsOf, emptyTx, formatAmount, forwardDebts, homeValue, normalizeTx, pairwiseDebts,
   parseAmount, refundedTotal, settlementPlan, spendingBy, toMajor, validateTx,
   type Account, type LedgerCtx, type Person, type RateCtx, type Trip, type Tx,
 } from './index.ts';
@@ -389,4 +389,31 @@ test('computeHomeBalances: real charges allocate exactly, table rates estimate, 
   assert.deepEqual([...h.unconverted], [['MYR', 500]]);
   assert.ok(h.net.get(CARA) == null, 'unconverted debts do not enter the home net');
   assert.deepEqual(settlementPlan(h.net).map((d) => d.currency), ['INR', 'INR']);
+});
+
+test('forwardDebts: passes debts along real chains only, keeps every net, cancels loops', () => {
+  type D = { from: number; to: number; currency: string; amount: number };
+  const d = (from: number, to: number, amount: number, currency = 'INR'): D => ({ from, to, currency, amount });
+  const nets = (ds: D[]) => {
+    const m = new Map<string, number>();
+    for (const x of ds) { m.set(`${x.from}|${x.currency}`, (m.get(`${x.from}|${x.currency}`) ?? 0) - x.amount); m.set(`${x.to}|${x.currency}`, (m.get(`${x.to}|${x.currency}`) ?? 0) + x.amount); }
+    return [...m].filter(([, v]) => v !== 0).sort();
+  };
+  const key = (ds: D[]) => ds.map((x) => `${x.from}->${x.to} ${x.currency} ${x.amount}`);
+  // chain: A owes B 10, B owes C 4  ->  A pays C 4 on B's behalf, A still owes B 6
+  assert.deepEqual(key(forwardDebts([d(1, 2, 10), d(2, 3, 4)])), ['1->2 INR 6', '1->3 INR 4']);
+  // two-person loop just cancels
+  assert.deepEqual(key(forwardDebts([d(1, 2, 5), d(2, 1, 3)])), ['1->2 INR 2']);
+  // a real trip: Bob(4), Cara(5), Dan(6), Eve(7) owe around Me(1); Eve must never be told to pay Cara
+  const real = [d(4, 1, 100), d(4, 5, 50), d(4, 7, 2), d(5, 7, 2), d(6, 7, 2), d(7, 1, 30)];
+  const out = forwardDebts(real);
+  assert.deepEqual(key(out), ['4->1 INR 104', '4->5 INR 48', '6->1 INR 2', '7->1 INR 24']);
+  assert.ok(!out.some((x) => x.from === 7 && x.to !== 1), 'Eve pays only Me');
+  assert.deepEqual(nets(out), nets(real), 'nobody\'s position changes');
+  // currencies never mix: an SGD credit cannot absorb an MYR debt
+  const mixed = [d(4, 5, 300, 'SGD'), d(5, 7, 2, 'MYR'), d(7, 1, 30, 'MYR')];
+  assert.deepEqual(key(forwardDebts(mixed)), ['5->1 MYR 2', '7->1 MYR 28', '4->5 SGD 300']);
+  assert.deepEqual(nets(forwardDebts(mixed)), nets(mixed));
+  // nothing to forward: unchanged
+  assert.deepEqual(key(forwardDebts([d(2, 1, 7), d(3, 1, 9)])), ['2->1 INR 7', '3->1 INR 9']);
 });
