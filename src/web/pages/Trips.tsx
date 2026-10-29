@@ -355,7 +355,7 @@ function TripDetail({ trip }: { trip: Trip }) {
           <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
         </div>
         <div className="row">
-          <button onClick={() => setApplePay(true)} data-testid="apple-pay"><Smartphone />Apple Pay</button>
+          <button onClick={() => setApplePay(true)} data-testid="apple-pay"><Smartphone />iPhone shortcuts</button>
           <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>
           {owner && <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>}
           {owner && !trip.closed && <button disabled={busy} onClick={() => setClosed(1)} data-testid="close-trip"><Lock />Close trip</button>}
@@ -377,7 +377,7 @@ function TripDetail({ trip }: { trip: Trip }) {
       )}
       {edit && <TripForm existing={trip} onClose={() => setEdit(false)} />}
       {share && <ShareModal trip={trip} onClose={() => setShare(false)} />}
-      {applePay && <Modal title="Apple Pay → Kitty" onClose={() => setApplePay(false)}><ShortcutSetup trip={trip} /></Modal>}
+      {applePay && <Modal title="iPhone shortcuts" onClose={() => setApplePay(false)}><ShortcutSetup trip={trip} /></Modal>}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Check, Copy, KeyRound, Smartphone } from 'lucide-react';
+import { Check, Copy, KeyRound, Receipt, Smartphone, Zap } from 'lucide-react';
 import type { Trip } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { copyText, useLedger } from '../store.tsx';
@@ -100,6 +100,35 @@ export function ShortcutSetup({ trip }: { trip: Trip }) {
           <li>Choose <strong>Kitty Apple Pay</strong> (it receives the payment as Shortcut Input). Done: pay with Apple Pay on a trip day to try it.</li>
         </ol>
         <span className="hint">Needs iOS 17 or later and a card in Apple Wallet. “Edit in Kitty” opens Safari, so stay signed in there too.</span>
+      </section>
+
+      <section className="stack tight">
+        <h3 className="row"><Zap />Kitty expense: cash in two taps</h3>
+        <span className="hint">For cash and anything not paid with Apple Pay, without opening Kitty. In the app itself, the + Add button already opens a one-screen Quick add on trip days.</span>
+        <details>
+          <summary>Build it (about 2 minutes, uses the same key)</summary>
+          <ol className="steps">
+            <li>New shortcut named <strong>Kitty expense</strong>. Add <strong>Ask for Input</strong> (Number, prompt “Amount”), then <strong>Ask for Input</strong> (Text, prompt “What for?”).</li>
+            <li>Add <strong>Choose from Menu</strong> with <em>Everyone</em> and <em>Just me</em>.</li>
+            <li>Under each: <strong>Get Contents of URL</strong> like step 2 above (same URL and Authorization) with JSON fields <code>amount</code> = the first Provided Input, <code>merchant</code> = the second, <code>date</code> = Current Date (ISO 8601), <code>paid</code> = <code>cash</code>, and <code>action</code> = <code>split</code> under Everyone or <code>mine</code> under Just me. Then <strong>Show Notification</strong> with Contents of URL.</li>
+            <li>Put it where your thumb is: Share → <strong>Add to Home Screen</strong>, or Settings → Accessibility → Touch → <strong>Back Tap</strong> → Double Tap → Kitty expense, or just say “Hey Siri, Kitty expense”.</li>
+          </ol>
+        </details>
+        <span className="hint">Type the amount in the trip’s currency; it comes out of your cash wallet in that currency, so cash in hand stays right.</span>
+      </section>
+
+      <section className="stack tight">
+        <h3 className="row"><Receipt />Share to Kitty: Google Pay receipts</h3>
+        <span className="hint">In Google Pay open a payment → Share → <strong>Share to Kitty</strong>. Kitty opens it filled in: a repayment when it is a friend (matched by the UPI ID on People, else the name), otherwise an expense. Check it and save. Sharing the same receipt twice is caught by its UPI transaction ID.</span>
+        <details>
+          <summary>Build it (about 1 minute, no key needed)</summary>
+          <ol className="steps">
+            <li>New shortcut named <strong>Share to Kitty</strong>. Tap ⓘ, turn on <strong>Show in Share Sheet</strong> and let it receive <strong>Images</strong>.</li>
+            <li>Add <strong>Extract Text from Image</strong> (Shortcut Input), then <strong>URL Encode</strong> that Text.</li>
+            <li>Add <strong>Open URLs</strong> with <Code id="receipt" text={`${window.location.origin}/#/receipt?text=`} /> followed by the URL Encoded Text.</li>
+          </ol>
+        </details>
+        <span className="hint">It opens in Safari, so stay signed in to Kitty there.</span>
       </section>
 
       {owner && (

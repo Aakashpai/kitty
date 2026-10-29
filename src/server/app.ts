@@ -357,7 +357,7 @@ export async function createApp(opts: AppOptions) {
     const action = String(c.body.action ?? '').trim().toLowerCase();
     const text = (s: string) => new Raw('text/plain; charset=utf-8', Buffer.from(s));
     const live = state.trips.filter((t) => !t.closed && !t.archived && pid != null && t.members.includes(pid) && t.start_date && t.end_date && t.start_date <= day && day <= t.end_date);
-    if (!live.length) return action ? text('') : { ask: 'no' };
+    if (!live.length) return action ? text(action.startsWith('skip') ? '' : 'No trip on today’s date in Kitty, so nothing was added.') : { ask: 'no' };
     const money = parseMoney(String(c.body.amount ?? ''), live[0]!.currency);
     if (!money) return action ? text('Kitty could not read that amount. Add it in the app.') : { ask: 'no' };
     const trip = live.find((t) => t.currency === money.currency) ?? live[0]!;
@@ -375,12 +375,15 @@ export async function createApp(opts: AppOptions) {
     const people = mine ? [pid!] : trip.members;
     const shares = allocate(money.amount, people.map(() => 1));
     const card = optStr(c.body.card)?.slice(0, 60);
-    const tx = normalizeTx({ type: 'expense', date: day, description: merchant, category, trip_id: trip.id, currency: money.currency, amount: money.amount, payer_id: pid, split_method: 'equal', splits: people.map((p, i) => ({ person_id: p, amount: shares[i], input: null })), notes: `From Apple Pay${card ? ` (${card})` : ''}` });
+    // "Kitty expense" (typed in) says paid: cash, so the money leaves your cash wallet in that currency and cash in hand stays right.
+    const cash = String(c.body.paid ?? '').toLowerCase() === 'cash' ? state.accounts.find((a) => a.person_id === pid && a.type === 'cash' && !a.archived && a.currency === money.currency) : undefined;
+    const source = cash ? `Cash (${cash.name})` : c.body.paid ? 'Kitty expense shortcut' : `Apple Pay${card ? ` (${card})` : ''}`;
+    const tx = normalizeTx({ type: 'expense', date: day, description: merchant, category, trip_id: trip.id, currency: money.currency, amount: money.amount, payer_id: pid, from_account_id: cash?.id ?? null, split_method: 'equal', splits: people.map((p, i) => ({ person_id: p, amount: shares[i], input: null })), notes: `From ${source}` });
     const errors = validateTx(tx, state);
     if (errors.length) return text(`Not added: ${errors[0]}`);
     const saved = await db.createTx(tx, pid);
     await announce(db, user, saved, 'added');
-    return text(`Added to ${trip.name}: ${label}${mine ? ', just you' : `, split ${people.length} ways`}`);
+    return text(`Added to ${trip.name}: ${label}${mine ? ', just you' : `, split ${people.length} ways`}${cash ? `, from ${cash.name}` : ''}`);
   });
 
   route('GET', '/api/push/key', 'user', async () => ({ key: await publicKey(db) }));

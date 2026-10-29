@@ -1,11 +1,12 @@
 import { useEffect, useState, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
-import type { TxInput, Tx } from '../engine/index.ts';
+import { parseReceipt, type Trip, type TxInput, type Tx } from '../engine/index.ts';
 import { dropQueued, flushQueue, queued } from './api.ts';
-import { LedgerProvider, useLedger } from './store.tsx';
+import { LedgerProvider, guessCategory, useLedger } from './store.tsx';
 import { navigate, useRoute } from './router.tsx';
 import { TxForm } from './components/TxForm.tsx';
+import { QuickAdd, liveTrip, localToday } from './components/QuickAdd.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { Overview } from './pages/Overview.tsx';
 import { Trips } from './pages/Trips.tsx';
@@ -63,7 +64,8 @@ const useSimple = () => {
 
 function Shell() {
   const { section, id, path } = useRoute();
-  const { state, user, logout, owner } = useLedger();
+  const { state, user, logout, owner, me } = useLedger();
+  const [quick, setQuick] = useState<Trip | null>(null);
   const [theme, toggleTheme] = useTheme();
   const [form, setForm] = useState<{ initial?: Partial<TxInput>; existing?: Tx; onSaved?: (tx: Tx) => void } | null>(null);
   const [formKey, setFormKey] = useState(0); // a fresh form each time, even when one form opens another ("Again" chips)
@@ -74,6 +76,33 @@ function Shell() {
   useEffect(() => setMenu(false), [path]);
   useEffect(() => { document.body.style.overflow = menu ? 'hidden' : ''; return () => { document.body.style.overflow = ''; }; }, [menu]);
   const open: OpenTxForm = (opts = {}) => { setForm(opts); setFormKey((k) => k + 1); };
+  // On a trip day the Add buttons open the one-screen Quick add; any other day, the full form.
+  const addFast = () => { const t = liveTrip(state.trips, me.id); if (t) setQuick(t); else open(); };
+
+  // "#/quick" (a home-screen bookmark) opens Quick add. "#/receipt?text=…" is the "Share to Kitty" shortcut: the text the
+  // iPhone read off a Google Pay receipt becomes a filled-in entry to check: a repayment with a friend, else an expense.
+  useEffect(() => {
+    if (path.startsWith('/quick')) { addFast(); navigate('/'); return; }
+    if (!path.startsWith('/receipt')) return;
+    const r = parseReceipt(new URLSearchParams(path.split('?')[1] ?? '').get('text') ?? '');
+    navigate('/transactions');
+    const dupe = r.ref ? state.transactions.find((t) => t.reference === r.ref) : undefined;
+    if (dupe) { window.alert(`Already in Kitty: “${dupe.description}” on ${dupe.date} (UPI ${r.ref}).`); return; }
+    const mine = me.upi_id?.toLowerCase();
+    const first = (n: string) => n.trim().split(/\s+/)[0]!.toLowerCase();
+    const friend = state.people.find((p) => p.id !== me.id && p.upi_id && r.upiIds.includes(p.upi_id.toLowerCase()) && p.upi_id.toLowerCase() !== mine)
+      ?? (r.name ? state.people.find((p) => p.id !== me.id && first(p.name) === first(r.name!)) : undefined);
+    const date = r.date ?? localToday();
+    const base: Partial<TxInput> = { amount: r.amount ?? 0, currency: 'INR', date, reference: r.ref, notes: 'From a Google Pay receipt' };
+    const short = (n: string) => n.split(' ')[0];
+    if (friend || r.direction === 'received') {
+      const them = friend ? short(friend.name) : (r.name ?? 'Someone');
+      open({ initial: { ...base, type: 'repayment', method: 'UPI', payer_id: r.direction === 'received' ? (friend?.id ?? null) : me.id, payee_id: r.direction === 'received' ? me.id : (friend?.id ?? null),
+        description: r.direction === 'received' ? `${them} paid ${short(me.name)} (UPI)` : `${short(me.name)} paid ${them} (UPI)` } });
+    } else {
+      open({ initial: { ...base, type: 'expense', description: r.name ?? 'UPI payment', category: guessCategory(r.name ?? ''), trip_id: liveTrip(state.trips, me.id, date)?.id ?? null } });
+    }
+  }, [path]);
 
   // "#/add?amount=1250&currency=SGD&…" is the Apple Pay shortcut's "Edit in Kitty": open the add form filled in, then show the trip.
   useEffect(() => {
@@ -126,7 +155,7 @@ function Shell() {
             </span>
           </header>
           <main className="main simple-main"><QueueBanner /><SimpleView scope={scope} onScope={setScope} /></main>
-          <button className="primary fab" onClick={() => open()} aria-label="Add transaction"><Plus />Add</button>
+          <button className="primary fab" onClick={addFast} aria-label="Add transaction"><Plus />Add</button>
         </div>
       ) : (
       <div className="app">
@@ -149,7 +178,7 @@ function Shell() {
             {trips.length === 0 && <span className="faint small trip-link" style={{ padding: '4px 10px' }}>No trips yet</span>}
           </nav>
           <div className="sidebar-foot">
-            <button className="primary add-side" onClick={() => open()} data-testid="add-transaction"><Plus />Add transaction</button>
+            <button className="primary add-side" onClick={addFast} data-testid="add-transaction"><Plus />Add transaction</button>
             <span className="shortcut">Press <kbd className="kbd">N</kbd> to add</span>
             <button className="ghost theme-toggle" onClick={toggleSimple} title="Simple view" data-testid="simple-toggle"><Smartphone /><span className="label">Simple view</span></button>
             <button className="ghost theme-toggle" onClick={toggleTheme} aria-label="Toggle theme" data-testid="theme-toggle">
@@ -166,10 +195,11 @@ function Shell() {
           </div>
         </aside>
         <main className="main"><QueueBanner />{page}</main>
-        <button className="primary fab" onClick={() => open()} aria-label="Add transaction"><Plus />Add</button>
+        <button className="primary fab" onClick={addFast} aria-label="Add transaction"><Plus />Add</button>
       </div>
       )}
       {account && <AccountModal onClose={() => setAccount(false)} />}
+      {quick && <QuickAdd trip={quick} onClose={() => setQuick(null)} onMore={(initial) => { setQuick(null); open({ initial }); }} />}
       {form && (
         <TxForm
           key={formKey}
