@@ -170,7 +170,7 @@ export function Overview() {
                     const spent = spendingBy(txs, () => 'all').get('all') ?? new Map<string, number>();
                     return (
                       <tr key={t.id} className="clickable" onClick={() => { window.location.hash = `/trips/${t.id}`; }}>
-                        <td><span className="who" style={hueStyle(t.id)}><TripMark name={t.name}><i className="avatar sm" style={{ width: 8, height: 8 }} /></TripMark>{t.name}</span><div className="faint small">{t.members.map(who).join(', ')}</div></td>
+                        <td><span className="who" style={hueStyle(t.id)}><TripMark name={t.name} id={t.id} />{t.name}</span><div className="faint small">{t.members.map(who).join(', ')}</div></td>
                         <td className="num"><MoneyList map={spent} empty="—" /><div className="small"><MoneyList map={net} sign empty="settled" /></div></td>
                       </tr>
                     );

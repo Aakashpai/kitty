@@ -114,7 +114,7 @@ function TripCard({ trip }: { trip: Trip }) {
   return (
     <a className="panel trip-card" href={`#/trips/${trip.id}`} style={hueStyle(trip.id)} data-testid={`trip-card-${trip.id}`}>
       <div className="row between">
-        <span className="name"><TripMark name={trip.name}><i /></TripMark>{trip.name}{trip.closed ? <Lock className="lock" aria-label="Closed" /> : null}</span>
+        <span className="name"><TripMark name={trip.name} id={trip.id} />{trip.name}{trip.closed ? <Lock className="lock" aria-label="Closed" /> : null}</span>
         <span className="badge">{trip.currency}</span>
       </div>
       <div className="row between">
@@ -351,19 +351,25 @@ function TripDetail({ trip }: { trip: Trip }) {
       <div className="page-head">
         <div>
           <a href="#/trips" className="back"><ChevronLeft />All trips</a>
-          <h1 className="row" style={{ gap: 10 }}><TripMark name={trip.name}><i className="avatar" style={{ ...hueStyle(trip.id), width: 12, height: 12 }} /></TripMark>{trip.name}{trip.closed ? <span className="badge"><Lock />closed</span> : null}{trip.archived ? <span className="badge">archived</span> : null}</h1>
+          <h1 className="row" style={{ gap: 10, flexWrap: 'nowrap', alignItems: 'baseline' }}><TripMark name={trip.name} id={trip.id} /><span>{trip.name}</span>{trip.archived ? <span className="badge">archived</span> : null}</h1>
           <div className="sub">{trip.start_date ? `${fmtDate(trip.start_date)} – ${fmtDate(trip.end_date)} · ` : ''}{trip.currency}{trip.notes ? ` · ${trip.notes}` : ''}</div>
         </div>
         <div className="row">
           <button onClick={() => setApplePay(true)} data-testid="apple-pay"><Smartphone />Apple Pay</button>
           <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>
           {owner && <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>}
-          {owner && <button disabled={busy} onClick={() => setClosed(trip.closed ? 0 : 1)} data-testid="close-trip">{trip.closed ? <><LockOpen />Reopen</> : <><Lock />Close trip</>}</button>}
+          {owner && !trip.closed && <button disabled={busy} onClick={() => setClosed(1)} data-testid="close-trip"><Lock />Close trip</button>}
           {!trip.closed && <button onClick={() => openForm({ initial: { type: 'withdrawal', trip_id: trip.id } })}><Banknote />Cash withdrawal</button>}
           {!trip.closed && <button className="primary" onClick={() => openForm({ initial: { type: 'expense', trip_id: trip.id, currency: trip.currency } })} data-testid="trip-add-expense"><Plus />Add expense</button>}
         </div>
       </div>
-      {trip.closed ? <div className="info-box small" data-testid="trip-closed"><Lock /> Closed and locked: entries can’t be added, changed or deleted{owner ? '. Reopen to change them.' : ' unless the owner reopens it.'}</div> : null}
+      {trip.closed ? (
+        <div className="locked-note" data-testid="trip-closed">
+          <Lock />
+          <span>Closed · entries are locked{owner ? '' : ' until the owner reopens it'}</span>
+          {owner && <button className="small" disabled={busy} onClick={() => setClosed(0)} data-testid="reopen-trip"><LockOpen />Reopen</button>}
+        </div>
+      ) : null}
       <ErrorBox error={err} />
       <TripView key={trip.id} trip={trip} />
       {owner && txs.length === 0 && (

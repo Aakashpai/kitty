@@ -143,7 +143,7 @@ function Shell() {
           <nav className="nav" aria-label="Trips">
             {trips.map((t) => (
               <a key={t.id} href={`#/trips/${t.id}`} className={`trip-link ${section === 'trips' && id === t.id ? 'active' : ''}`} style={hueStyle(t.id)}>
-                <TripMark name={t.name}><span className="dot"><i /></span></TripMark><span className="name">{t.name}</span>
+                <TripMark name={t.name} id={t.id} /><span className="name">{t.name}</span>
               </a>
             ))}
             {trips.length === 0 && <span className="faint small trip-link" style={{ padding: '4px 10px' }}>No trips yet</span>}

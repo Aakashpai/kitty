@@ -18,7 +18,7 @@ export function ScopeSeg({ value, onChange, testId }: { value: string; onChange:
       <button className={value === '' ? 'on' : ''} onClick={() => onChange('')}>All</button>
       <button className={value === 'none' ? 'on' : ''} onClick={() => onChange('none')}>Personal</button>
       {state.trips.filter((t) => !t.archived || String(t.id) === value).map((t) => (
-        <button key={t.id} className={value === String(t.id) ? 'on' : ''} onClick={() => onChange(String(t.id))} style={hueStyle(t.id)}><TripMark name={t.name}><span className="dot" /></TripMark>{t.name}</button>
+        <button key={t.id} className={value === String(t.id) ? 'on' : ''} onClick={() => onChange(String(t.id))} style={hueStyle(t.id)}><TripMark name={t.name} id={t.id} />{t.name}</button>
       ))}
     </div>
   );

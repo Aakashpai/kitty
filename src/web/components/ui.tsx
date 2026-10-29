@@ -78,16 +78,38 @@ const countryIndex = () => {
   return { re: new RegExp(`(?<!\\p{L})(${alts.join('|')})(?!\\p{L})`, 'iu'), codes };
 };
 /** "Singapore 2026" -> 🇸🇬; null when the name has no country in it. */
-export const flagOf = (name: string): string | null => {
+/** Every country a name mentions, as ISO codes, in order and without repeats. */
+const countriesIn = (name: string): string[] => {
   countries ??= countryIndex();
-  const code = countries.codes.get(countries.re.exec(name)?.[1]?.toLowerCase() ?? '');
-  return code ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : null;
+  const { re, codes } = countries;
+  return [...new Set([...name.matchAll(new RegExp(re.source, 'giu'))].map((m) => codes.get(m[1]!.toLowerCase())!).filter(Boolean))];
 };
-/** A trip's mark: its country's flag when the name has one, otherwise the coloured dot passed in. */
-export const TripMark = ({ name, children }: { name: string; children: ReactNode }) => {
-  const flag = flagOf(name);
-  return flag ? <span className="flag" aria-hidden>{flag}</span> : <>{children}</>;
+const flag = (code: string) => String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+// Names that say what kind of trip it is, checked in order; places are the usual Indian getaways.
+const THEMES: [RegExp, string][] = [
+  [/\b(flights?|package|airport)\b/i, '✈️'],
+  [/\b(beach|island|coast|goa|gokarna|bali|phuket|andaman|pondicherry|puducherry|varkala|alibaug|lakshadweep)\b/i, '🏖️'],
+  [/\b(trek|hike|hills?|mountains?|snow|ski|manali|shimla|ladakh|leh|kashmir|ooty|munnar|darjeeling|coorg|kodaikanal|mussoorie|rishikesh|spiti|kasol|sikkim)\b/i, '🏔️'],
+  [/\b(road ?trip|drive)\b/i, '🚗'],
+  [/\b(camp|camping)\b/i, '⛺'],
+  [/\b(cruise|boat)\b/i, '🛳️'],
+  [/\b(wedding)\b/i, '💍'],
+  [/\b(birthday|party)\b/i, '🎉'],
+  [/\b(flat|flatmates|home|house|rent)\b/i, '🏠'],
+  [/\b(city|dubai|mumbai|bangalore|bengaluru|delhi|hyderabad|chennai|kolkata|tokyo|paris|london)\b/i, '🏙️'],
+];
+const PICKS = ['🏝️', '🗼', '🌅', '🎡', '🗺️', '🎒', '🏞️', '⛵', '🚆', '🏕️'];
+/**
+ * A trip's icon: the flag when its name mentions exactly one country ("Singapore 2026" → 🇸🇬); otherwise an emoji
+ * for the kind of trip ("… package (flights + land)" → ✈️, "Goa" → 🏖️), 🌏 for several countries, else one picked
+ * by the trip's id so each trip keeps the same icon.
+ */
+export const tripIcon = (name: string, id: number): string => {
+  const codes = countriesIn(name);
+  if (codes.length === 1) return flag(codes[0]!);
+  return THEMES.find(([re]) => re.test(name))?.[1] ?? (codes.length ? '🌏' : PICKS[Math.abs(id) % PICKS.length]!);
 };
+export const TripMark = ({ name, id }: { name: string; id: number }) => <span className="flag" aria-hidden>{tripIcon(name, id)}</span>;
 
 /** Spent against a budget: a bar that turns red past 100%, then what is left (or how far over). */
 export const BudgetBar = ({ spent, limit, currency }: { spent: number; limit: number; currency: string }) => (
