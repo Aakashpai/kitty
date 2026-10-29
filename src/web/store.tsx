@@ -75,6 +75,7 @@ function watchHealth(onBack: () => void, onTick: (secondsLeft: number) => void) 
 export function LedgerProvider({ children, initialState, readOnly = false }: { children: ReactNode; initialState?: LedgerState; readOnly?: boolean }) {
   const [state, setState] = useState<LedgerState | null>(initialState ?? null);
   const [phase, setPhase] = useState<Phase>(initialState ? 'ready' : 'loading');
+  useEffect(() => { if (initialState) setState(initialState); }, [initialState]); // read-only pages refetch after a vote or a tick
   const [offline, setOffline] = useState(false);
   const [countdown, setCountdown] = useState(5);
   const [downMessage, setDownMessage] = useState('');

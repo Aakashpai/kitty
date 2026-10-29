@@ -6,7 +6,7 @@ import { TripView } from './Trips.tsx';
 import { SimpleView } from './Simple.tsx';
 import { APP_NAME, Logo, fmtDate } from '../components/ui.tsx';
 
-function SharedInner({ token, simple }: { token: string; simple: boolean }) {
+function SharedInner({ token, simple, onRefresh }: { token: string; simple: boolean; onRefresh: () => Promise<void> }) {
   const { state, me } = useLedger();
   const [scope, setScope] = useState('');
   const person = state.shared_person_id != null ? me : null;
@@ -28,7 +28,7 @@ function SharedInner({ token, simple }: { token: string; simple: boolean }) {
             <div className="sub">{person ? 'Only the entries you are part of, and where things stand' : `${trip!.start_date ? `${fmtDate(trip!.start_date)} – ${fmtDate(trip!.end_date)} · ` : ''}${trip!.currency}${trip!.notes ? ` · ${trip!.notes}` : ''}`}</div>
           </div>
         </div>
-        {person ? <SimpleView scope={scope} onScope={setScope} /> : simple ? <SimpleView scope={String(trip!.id)} /> : <TripView trip={trip!} />}
+        {person ? <SimpleView scope={scope} onScope={setScope} /> : simple ? <SimpleView scope={String(trip!.id)} /> : <TripView trip={trip!} shareToken={token} onRefresh={onRefresh} />}
         <p className="faint small" style={{ marginTop: 24 }}>Shared read-only. Amounts stay in the currency they were spent in; nothing here can be edited.</p>
       </main>
     </div>
@@ -52,7 +52,7 @@ export function SharedPage({ token, simple = false }: { token: string; simple?: 
   if (!state) return <div className="center-box"><span className="pulse" aria-hidden /><p className="muted">Opening the shared trip…</p></div>;
   return (
     <LedgerProvider initialState={state} readOnly>
-      <SharedInner token={token} simple={simple} />
+      <SharedInner token={token} simple={simple} onRefresh={async () => setState(await api<LedgerState>('GET', `/api/shared/${token}`))} />
     </LedgerProvider>
   );
 }

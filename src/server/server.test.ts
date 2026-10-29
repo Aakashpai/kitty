@@ -335,6 +335,46 @@ test('documents: vault, folders, ciphertext in chunks, share links, cleanup', as
   assert.deepEqual([after.folders.length, after.documents.length], [0, 0]);
 });
 
+test('trip plan: members edit, stays take votes, a trip link can vote and tick but not edit', async () => {
+  const st = await owner.state();
+  const me = st.people.find((p) => p.is_me)!;
+  const friend = (await owner.ok('POST', '/api/people', { name: 'Planner Pal' })) as unknown as { id: number };
+  const trip = (await owner.ok('POST', '/api/trips', { name: 'Villa weekend', currency: 'INR', start_date: '2026-11-07', end_date: '2026-11-08', members: [me.id, friend.id], budget: { total: 1200000, categories: {} } })) as unknown as { id: number };
+  assert.equal((await anon.call('POST', `/api/trips/${trip.id}/plan`, { kind: 'task', title: 'x' })).status, 401);
+  assert.equal((await owner.call('POST', `/api/trips/${trip.id}/plan`, { kind: 'wish', title: 'x' })).status, 400, 'unknown kind');
+  assert.equal((await owner.call('POST', `/api/trips/${trip.id}/plan`, { kind: 'stay', title: 'Villa A', body: 'not a url' })).status, 400, 'links must be urls');
+  const villaA = (await owner.ok('POST', `/api/trips/${trip.id}/plan`, { kind: 'stay', title: 'Villa A', body: 'https://example.com/a', meta: { price: 1500000, distance: '2h' } })) as unknown as { id: number; meta: { price: number } };
+  assert.equal(villaA.meta.price, 1500000);
+  const villaB = (await owner.ok('POST', `/api/trips/${trip.id}/plan`, { kind: 'stay', title: 'Villa B' })) as unknown as { id: number };
+  const task = (await owner.ok('POST', `/api/trips/${trip.id}/plan`, { kind: 'task', title: 'Book the stay', assignee_id: friend.id })) as unknown as { id: number; assignee_id: number; done: number };
+  assert.deepEqual([task.assignee_id, task.done], [friend.id, 0]);
+  const day = (await owner.ok('POST', `/api/trips/${trip.id}/plan`, { kind: 'day', title: 'Drive up, lunch on the way', day: '2026-11-07' })) as unknown as { id: number; day: string };
+  assert.equal(day.day, '2026-11-07');
+  // votes: the owner votes as themself, toggling
+  assert.deepEqual(await owner.ok('POST', `/api/plan/${villaA.id}/vote`, {}), { voted: true });
+  assert.deepEqual(await owner.ok('POST', `/api/plan/${villaA.id}/vote`, {}), { voted: false });
+  await owner.ok('POST', `/api/plan/${villaA.id}/vote`, {});
+  // a trip link: the plan travels with it; voting and ticking need a member's name, nothing else is allowed
+  const share = (await owner.ok('POST', '/api/shares', { trip_id: trip.id })) as unknown as { token: string };
+  const view = (await anon.ok('GET', `/api/shared/${share.token}`)) as unknown as LedgerState;
+  assert.equal(view.plan?.length, 4);
+  assert.deepEqual(view.votes, [{ item_id: villaA.id, person_id: me.id }]);
+  assert.equal((await anon.call('POST', `/api/shared/${share.token}/plan/${villaB.id}/vote`, { person_id: 9999 })).status, 400, 'not a member');
+  assert.deepEqual(await anon.ok('POST', `/api/shared/${share.token}/plan/${villaB.id}/vote`, { person_id: friend.id }), { voted: true });
+  assert.equal((await anon.call('POST', `/api/shared/${share.token}/plan/${task.id}/vote`, { person_id: friend.id })).status, 400, 'only stays take votes');
+  await anon.ok('PUT', `/api/shared/${share.token}/plan/${task.id}/done`, { person_id: friend.id, done: 1 });
+  assert.equal((await anon.call('PUT', `/api/shared/${share.token}/plan/${villaB.id}/done`, { person_id: friend.id, done: 1 })).status, 400, 'only checklist items tick');
+  assert.equal((await anon.call('PUT', `/api/plan/${task.id}`, { title: 'hacked' })).status, 401);
+  assert.equal((await anon.call('DELETE', `/api/plan/${task.id}`)).status, 401);
+  // pick a stay: one chosen, the other cleared
+  await owner.ok('POST', `/api/plan/${villaB.id}/choose`, {});
+  const after = (await owner.state()).plan!.filter((p) => p.trip_id === trip.id);
+  assert.deepEqual(after.filter((p) => p.kind === 'stay').map((p) => [p.title, !!p.meta?.chosen]), [['Villa A', false], ['Villa B', true]]);
+  assert.equal(after.find((p) => p.id === task.id)?.done, 1);
+  await owner.ok('DELETE', `/api/plan/${villaA.id}`);
+  assert.ok(!(await owner.state()).votes!.some((v) => v.item_id === villaA.id), 'votes go with the item');
+});
+
 test('login lockout after repeated failures (runs last: it locks this IP)', async () => {
   const j = jar();
   for (let i = 0; i < 10; i++) assert.equal((await j.call('POST', '/api/auth/login', { email: 'me@example.com', password: 'nope' })).status, 401);

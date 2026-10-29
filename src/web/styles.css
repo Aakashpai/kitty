@@ -561,3 +561,24 @@ td .who { flex-wrap: wrap; white-space: normal; }
 .panel.pad h2 svg { width: 18px; height: 18px; color: var(--accent); }
 .info-box { background: var(--info-bg); color: var(--info); display: flex; align-items: center; gap: 8px; }
 .doc-nav a .label, .doc-nav .nav-add .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- trip plan ---------- */
+.plan-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
+.plan-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
+.plan-head h3 svg { width: 16px; height: 16px; color: var(--text-3); }
+.stay-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: var(--space-3); }
+.stay.chosen { border-color: var(--pos); }
+.stay .voters { display: inline-flex; align-items: center; gap: 4px; }
+.badge.pos { background: var(--pos-bg); color: var(--pos); }
+.inline-icon { width: 13px; height: 13px; vertical-align: -2px; }
+.plan-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.plan-row:last-of-type { border-bottom: 0; }
+.plan-row .title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.plan-row .grow { flex: 1; }
+.plan-row .check { font-size: 14px; color: var(--text); min-width: 0; }
+.plan-row .check span { overflow-wrap: anywhere; }
+.plan-row .done { text-decoration: line-through; color: var(--text-3); }
+.plan-row select { height: 28px; font-size: 12px; padding: 0 22px 0 8px; width: auto; max-width: 130px; flex: none; }
+.plan-add { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.plan-add input { flex: 1; min-width: 0; height: 32px; }
+.plan .info-box select { height: 30px; font-size: 13px; width: auto; }

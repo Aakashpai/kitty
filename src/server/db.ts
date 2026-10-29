@@ -1,7 +1,7 @@
 import { createClient, LibsqlError, type Client, type InValue } from '@libsql/client';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { DocFolder, DocItem, DocShare, SharedDocs, Vault } from '../engine/index.ts';
+import type { DocFolder, DocItem, DocShare, PlanItem, PlanVote, SharedDocs, Vault } from '../engine/index.ts';
 import { formatAmount, validateTx, type Account, type Activity, type Comment, type Id, type Invite, type LedgerState, type Person, type Reconciliation, type Recurring, type Share, type Trip, type TripBudget, type Tx, type TxInput, type UserPublic } from '../engine/index.ts';
 
 // Each entry runs once, in order; schema_migrations remembers which have been applied.
@@ -250,6 +250,27 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (storage_key, n)
   );
   `,
+  `
+  CREATE TABLE plan_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    meta TEXT,
+    day TEXT,
+    done INTEGER NOT NULL DEFAULT 0,
+    assignee_id INTEGER,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE plan_votes (
+    item_id INTEGER NOT NULL REFERENCES plan_items(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL,
+    PRIMARY KEY (item_id, person_id)
+  );
+  `,
 ];
 
 const parseBudget = (v: unknown): TripBudget | null => {
@@ -268,6 +289,12 @@ export const nextDate = (date: string, every: Recurring['every'], anchor = Numbe
   const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
   return new Date(Date.UTC(y, m, Math.min(anchor, last))).toISOString().slice(0, 10);
 };
+
+const parsePlan = (p: PlanItem): PlanItem => {
+  if (typeof p.meta === 'string') { try { p.meta = JSON.parse(p.meta) as PlanItem['meta']; } catch { p.meta = null; } }
+  return p;
+};
+const PLAN_LABEL: Record<PlanItem['kind'], string> = { day: 'Itinerary', task: 'To-do', pack: 'Packing', stay: 'Stay option', link: 'Link', note: 'Note' };
 
 const parseRates = (v: unknown): Record<string, number> | null => {
   if (typeof v !== 'string' || !v) return null;
@@ -306,7 +333,7 @@ const parseItems = (tx: Tx) => {
 };
 // Receipt photos stay out of the JSON backup: a few of them would pass the 4.5 MB response limit on Vercel.
 // Phone subscriptions stay out too: they belong to devices, not to the ledger.
-const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring', 'comments', 'vault', 'doc_folders', 'documents', 'doc_shares'] as const;
+const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring', 'comments', 'vault', 'doc_folders', 'documents', 'doc_shares', 'plan_items', 'plan_votes'] as const;
 const USER_COLS = 'id, email, name, role, person_id, created_at, seen_at';
 const INSERT_TX = `INSERT INTO transactions (${TX_COLS.join(', ')}, added_by, recurring_id, client_ref) VALUES (${TX_COLS.map(() => '?').join(', ')}, ?, ?, ?) RETURNING id`;
 
@@ -429,6 +456,8 @@ export async function openDb(url: string, authToken?: string) {
         { sql: 'SELECT id, every, next_date, template, created_by FROM recurring WHERE active = 1 ORDER BY next_date, id' },
         { sql: 'SELECT id, tx_id FROM receipts ORDER BY id' },
         { sql: 'SELECT id, tx_id, person_id, body, created_at FROM comments ORDER BY id' },
+        { sql: 'SELECT * FROM plan_items ORDER BY trip_id, kind, sort, id' },
+        { sql: 'SELECT item_id, person_id FROM plan_votes' },
         ...(owner ? [{ sql: `SELECT ${USER_COLS} FROM users ORDER BY id` }, { sql: "SELECT * FROM invites WHERE used_at IS NULL AND expires_at > datetime('now') ORDER BY id DESC" }] : []),
       ];
       let rs;
@@ -473,11 +502,13 @@ export async function openDb(url: string, authToken?: string) {
         recurring,
         receipts: rows<{ id: Id; tx_id: Id }>(11),
         comments: rows<Comment>(12),
+        plan: rows<PlanItem>(13).map(parsePlan),
+        votes: rows<PlanVote>(14),
         user,
       };
       if (owner) {
-        state.users = rows<UserPublic>(13);
-        state.invites = rows<Invite>(14);
+        state.users = rows<UserPublic>(15);
+        state.invites = rows<Invite>(16);
       }
       return user && !owner ? memberSlice(state, user.person_id, user.id) : state;
     },
@@ -492,13 +523,15 @@ export async function openDb(url: string, authToken?: string) {
       let rs;
       try {
         rs = await client.batch([
-          { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates FROM trips ORDER BY id' },
+          { sql: 'SELECT id, name, start_date, end_date, currency, notes, archived, rates, budget FROM trips ORDER BY id' },
           { sql: 'SELECT trip_id, person_id FROM trip_members ORDER BY person_id' },
           { sql: `SELECT * FROM transactions WHERE ${where} ORDER BY date DESC, id DESC`, args },
           { sql: `SELECT tx_id, person_id, amount, input FROM splits WHERE tx_id IN (SELECT id FROM transactions WHERE ${where}) ORDER BY person_id`, args },
           { sql: 'SELECT key, value FROM settings' },
           { sql: 'SELECT id, name, is_me, archived, upi_id FROM people ORDER BY is_me DESC, LOWER(name)' },
           { sql: 'SELECT id, person_id, name, type, currency, archived FROM accounts ORDER BY id' },
+          { sql: 'SELECT * FROM plan_items WHERE trip_id = ? ORDER BY kind, sort, id', args: [tripId ?? -1] },
+          { sql: 'SELECT item_id, person_id FROM plan_votes WHERE item_id IN (SELECT id FROM plan_items WHERE trip_id = ?)', args: [tripId ?? -1] },
         ], 'read');
       } catch (e) {
         throw friendly(e);
@@ -512,6 +545,7 @@ export async function openDb(url: string, authToken?: string) {
       for (const trip of trips) {
         trip.members = members.filter((m) => m.trip_id === trip.id).map((m) => m.person_id);
         trip.rates = parseRates(trip.rates as unknown);
+        trip.budget = parseBudget(trip.budget as unknown);
       }
       const byTx = new Map<Id, Tx['splits']>();
       for (const sp of rows<Tx['splits'][number] & { tx_id: Id }>(3)) {
@@ -541,6 +575,8 @@ export async function openDb(url: string, authToken?: string) {
         reconciliations: [],
         activity: [],
         shares: [],
+        plan: rows<PlanItem>(7).map(parsePlan),
+        votes: rows<PlanVote>(8),
         user: null,
         shared_person_id: personId,
       };
@@ -810,7 +846,7 @@ export async function openDb(url: string, authToken?: string) {
 
     restore: (data: Record<string, unknown>) => inTx(async (t) => {
       if (data.format !== 'ledger-backup' || !Array.isArray(data.people) || !Array.isArray(data.transactions)) throw new HttpError(400, 'Not a ledger backup file');
-      const tables = BACKUP_TABLES.filter((name) => Array.isArray(data[name]) || !['users', 'invites', 'shares', 'vault', 'doc_folders', 'documents', 'doc_shares'].includes(name));
+      const tables = BACKUP_TABLES.filter((name) => Array.isArray(data[name]) || !['users', 'invites', 'shares', 'vault', 'doc_folders', 'documents', 'doc_shares', 'plan_items', 'plan_votes'].includes(name));
       for (const table of [...tables].reverse()) await t.run(`DELETE FROM ${table}`);
       for (const table of tables) {
         for (const row of (data[table] as Row[] | undefined) ?? []) {
@@ -924,6 +960,53 @@ export async function openDb(url: string, authToken?: string) {
       return row ? Buffer.from(row.data as ArrayBuffer) : null;
     }),
     chunkCount: (key: string) => read(async (t) => (await t.get<{ n: number }>('SELECT COUNT(*) AS n FROM doc_chunks WHERE storage_key = ?', [key]))!.n),
+    // --- trip plan: board items and votes ----------------------------------------------------------------------
+    planItem: (id: Id) => read(async (t) => {
+      const r = await t.get<PlanItem>('SELECT * FROM plan_items WHERE id = ?', [id]);
+      if (!r) throw new HttpError(404, 'Plan item not found');
+      return parsePlan(r);
+    }),
+    isTripMember: (tripId: Id, personId: Id) => read(async (t) => !!(await t.get('SELECT 1 FROM trip_members WHERE trip_id = ? AND person_id = ?', [tripId, personId]))),
+    createPlanItem: (p: Pick<PlanItem, 'trip_id' | 'kind' | 'title' | 'body' | 'meta' | 'day' | 'assignee_id' | 'created_by'>) => inTx(async (t) => {
+      if (!(await t.get('SELECT 1 FROM trips WHERE id = ?', [p.trip_id]))) throw new HttpError(404, 'Trip not found');
+      const sort = ((await t.get<{ m: number | null }>('SELECT MAX(sort) AS m FROM plan_items WHERE trip_id = ? AND kind = ?', [p.trip_id, p.kind]))?.m ?? 0) + 1;
+      const row = (await t.get<{ id: number }>('INSERT INTO plan_items (trip_id, kind, title, body, meta, day, assignee_id, sort, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id', [p.trip_id, p.kind, p.title, p.body, p.meta ? JSON.stringify(p.meta) : null, p.day, p.assignee_id, sort, p.created_by]))!;
+      await logIn(t, 'create', 'plan', row.id, `${PLAN_LABEL[p.kind]}: ${p.title}`);
+      return parsePlan((await t.get<PlanItem>('SELECT * FROM plan_items WHERE id = ?', [row.id]))!);
+    }),
+    updatePlanItem: (id: Id, patch: Partial<Pick<PlanItem, 'title' | 'body' | 'meta' | 'day' | 'done' | 'assignee_id'>>) => inTx(async (t) => {
+      const cols: string[] = [];
+      const args: Val[] = [];
+      for (const [k, v] of Object.entries(patch)) { cols.push(`${k} = ?`); args.push(k === 'meta' ? (v ? JSON.stringify(v) : null) : (v as Val)); }
+      if (!cols.length) return;
+      if (!(await t.run(`UPDATE plan_items SET ${cols.join(', ')} WHERE id = ?`, [...args, id])).changes) throw new HttpError(404, 'Plan item not found');
+    }),
+    /** Marks one stay as the pick and clears the others on the same trip. */
+    chooseStay: (id: Id) => inTx(async (t) => {
+      const it = await t.get<PlanItem>('SELECT * FROM plan_items WHERE id = ? AND kind = ?', [id, 'stay']);
+      if (!it) throw new HttpError(404, 'Stay option not found');
+      for (const s of await t.all<PlanItem>('SELECT id, meta FROM plan_items WHERE trip_id = ? AND kind = ?', [it.trip_id, 'stay'])) {
+        const meta = parsePlan(s).meta ?? {};
+        await t.run('UPDATE plan_items SET meta = ? WHERE id = ?', [JSON.stringify({ ...meta, chosen: s.id === id }), s.id]);
+      }
+      await logIn(t, 'update', 'plan', id, `Picked the stay: ${it.title}`);
+    }),
+    deletePlanItem: (id: Id) => inTx(async (t) => {
+      const it = await t.get<PlanItem>('SELECT * FROM plan_items WHERE id = ?', [id]);
+      if (!it) throw new HttpError(404, 'Plan item not found');
+      await t.run('DELETE FROM plan_votes WHERE item_id = ?', [id]);
+      await t.run('DELETE FROM plan_items WHERE id = ?', [id]);
+      await logIn(t, 'delete', 'plan', id, `Removed ${PLAN_LABEL[it.kind].toLowerCase()}: ${it.title}`);
+    }),
+    /** Toggles a person's vote; returns whether they now have one. */
+    toggleVote: (itemId: Id, personId: Id) => inTx(async (t) => {
+      if (await t.get('SELECT 1 FROM plan_votes WHERE item_id = ? AND person_id = ?', [itemId, personId])) {
+        await t.run('DELETE FROM plan_votes WHERE item_id = ? AND person_id = ?', [itemId, personId]);
+        return false;
+      }
+      await t.run('INSERT INTO plan_votes (item_id, person_id) VALUES (?, ?)', [itemId, personId]);
+      return true;
+    }),
     /** True when `folderId` sits inside the tree rooted at `rootId`. */
     folderWithin: (folderId: Id, rootId: Id) => read(async (t) => (await folderTree(t, rootId)).includes(folderId)),
 

@@ -11,6 +11,7 @@ import { BalancesView } from '../components/BalancesView.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
 import { Avatar, BudgetBar, CategoryGlyph, DangerButton, TripMark, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
+import { TripPlan } from '../components/TripPlan.tsx';
 import { ShortcutSetup } from '../components/ShortcutSetup.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
 
@@ -242,9 +243,10 @@ function TripDays({ trip, txs, onOpen }: { trip: Trip; txs: Tx[]; onOpen: (tx: T
 }
 
 /** Everything about one trip: members, totals, transactions, balances, per-person. Also used by shared read-only links. */
-export function TripView({ trip }: { trip: Trip }) {
+export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareToken?: string; onRefresh?: () => Promise<void> }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
-  const [tab, setTab] = useState<'transactions' | 'categories' | 'days' | 'balances' | 'people'>('transactions');
+  // A trip that has no entries yet is being planned: open on the board.
+  const [tab, setTab] = useState<'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (state.transactions.some((t) => t.trip_id === trip.id) ? 'transactions' : 'plan'));
   const [selected, setSelected] = useState<number | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
@@ -282,8 +284,9 @@ export function TripView({ trip }: { trip: Trip }) {
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
-        {(['transactions', 'categories', 'days', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
+        {(['plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
+      {tab === 'plan' && <TripPlan trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
       {tab === 'transactions' && (
         <div className="stack tight">
           <div className="row end"><ExportButton txs={txs} title={trip.name} /></div>

@@ -6,7 +6,7 @@ import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
 import { CHUNK, MAX_DOC, isStorageKey, objectStoreFromEnv } from './storage.ts';
-import type { DocItem } from '../engine/index.ts';
+import type { DocItem, Id, PlanItem, PlanMeta } from '../engine/index.ts';
 import { announce, publicKey } from './push.ts';
 
 interface Ctx {
@@ -531,6 +531,79 @@ export async function createApp(opts: AppOptions) {
   route('DELETE', '/api/docs/:id', 'owner', async (c) => {
     const key = await db.deleteDocument(Number(c.params.id));
     if (store) await store.remove(key).catch(() => undefined);
+    return { ok: true };
+  });
+
+  // --- trip plan: board, stay shortlist with votes, checklists. Members edit; a trip link can vote and tick --------
+  const PLAN_KINDS = ['day', 'task', 'pack', 'stay', 'link', 'note'] as const;
+  const planKind = (v: unknown): PlanItem['kind'] => {
+    const k = String(v ?? '');
+    if (!(PLAN_KINDS as readonly string[]).includes(k)) throw new HttpError(400, 'Unknown plan item kind');
+    return k as PlanItem['kind'];
+  };
+  const planMeta = (v: unknown): PlanMeta | null => {
+    if (v == null) return null;
+    const o = (typeof v === 'object' ? v : {}) as Record<string, unknown>;
+    const price = o.price == null || o.price === '' ? null : int(o.price, 'Price');
+    if (price != null && price < 0) throw new HttpError(400, 'Price cannot be negative');
+    return { price, distance: optStr(o.distance), chosen: o.chosen === true };
+  };
+  const planUrl = (v: unknown, kind: PlanItem['kind']) => {
+    const s = optStr(v);
+    if (s && (kind === 'link' || kind === 'stay') && !/^https?:\/\//i.test(s)) throw new HttpError(400, 'Links must start with http:// or https://');
+    return s;
+  };
+  const seeTrip = (c: Ctx, tripId: Id) => mustSee(c, (s) => s.trips.some((t) => t.id === tripId), 'Trip');
+  const planOf = async (c: Ctx) => {
+    const it = await db.planItem(Number(c.params.id));
+    await seeTrip(c, it.trip_id);
+    return it;
+  };
+  route('POST', '/api/trips/:id/plan', 'user', async (c) => {
+    const trip_id = Number(c.params.id);
+    await seeTrip(c, trip_id);
+    const kind = planKind(c.body.kind);
+    return db.createPlanItem({ trip_id, kind, title: str(c.body.title, 'Title', 300), body: planUrl(c.body.body, kind), meta: kind === 'stay' ? planMeta(c.body.meta) : null, day: c.body.day ? date(c.body.day, 'Day') : null, assignee_id: optId(c.body.assignee_id, 'Assignee'), created_by: c.user!.person_id ?? null });
+  });
+  route('PUT', '/api/plan/:id', 'user', async (c) => {
+    const it = await planOf(c);
+    const patch: Parameters<typeof db.updatePlanItem>[1] = {};
+    if (c.body.title !== undefined) patch.title = str(c.body.title, 'Title', 300);
+    if (c.body.body !== undefined) patch.body = planUrl(c.body.body, it.kind);
+    if (c.body.meta !== undefined) patch.meta = it.kind === 'stay' ? planMeta(c.body.meta) : null;
+    if (c.body.day !== undefined) patch.day = c.body.day ? date(c.body.day, 'Day') : null;
+    if (c.body.done !== undefined) patch.done = flag(c.body.done);
+    if (c.body.assignee_id !== undefined) patch.assignee_id = optId(c.body.assignee_id, 'Assignee');
+    await db.updatePlanItem(it.id, patch);
+    return { ok: true };
+  });
+  route('POST', '/api/plan/:id/choose', 'user', async (c) => (await db.chooseStay((await planOf(c)).id), { ok: true }));
+  route('DELETE', '/api/plan/:id', 'user', async (c) => (await db.deletePlanItem((await planOf(c)).id), { ok: true }));
+  route('POST', '/api/plan/:id/vote', 'user', async (c) => {
+    const it = await planOf(c);
+    const person = isOwner(c) && c.body.person_id != null ? int(c.body.person_id, 'Person') : c.user!.person_id;
+    if (person == null) throw new HttpError(400, 'Your login is not linked to a person');
+    return { voted: await db.toggleVote(it.id, person) };
+  });
+  // From a trip link: pick your name, then vote or tick. Trusted as far as the link is.
+  const linkMember = async (c: Ctx) => {
+    const share = await db.getShare(c.params.token ?? '');
+    if (!share || share.trip_id == null) throw new HttpError(404, 'This link has been turned off or never existed.');
+    const it = await db.planItem(Number(c.params.id));
+    if (it.trip_id !== share.trip_id) throw new HttpError(404, 'Not on this trip');
+    const person = int(c.body.person_id, 'Person');
+    if (!(await db.isTripMember(share.trip_id, person))) throw new HttpError(400, 'Pick a name from this trip');
+    return { it, person };
+  };
+  route('POST', '/api/shared/:token/plan/:id/vote', 'public', async (c) => {
+    const { it, person } = await linkMember(c);
+    if (it.kind !== 'stay') throw new HttpError(400, 'Only stay options take votes');
+    return { voted: await db.toggleVote(it.id, person) };
+  });
+  route('PUT', '/api/shared/:token/plan/:id/done', 'public', async (c) => {
+    const { it } = await linkMember(c);
+    if (it.kind !== 'task' && it.kind !== 'pack') throw new HttpError(400, 'Only checklist items can be ticked');
+    await db.updatePlanItem(it.id, { done: flag(c.body.done) });
     return { ok: true };
   });
 

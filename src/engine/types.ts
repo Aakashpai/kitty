@@ -200,6 +200,8 @@ export interface LedgerState extends LedgerCtx {
   recurring?: Recurring[];
   receipts?: { id: Id; tx_id: Id }[]; // photos are fetched one by one from /api/receipts/:id
   comments?: Comment[];
+  plan?: PlanItem[];
+  votes?: PlanVote[];
   user: UserPublic | null; // who is signed in (null for shared read-only views)
   shared_person_id?: Id | null; // person share links: whose point of view the page takes
   users?: UserPublic[]; // owner only
@@ -256,3 +258,22 @@ export interface DocItem {
 export interface DocShare { id: Id; token: string; folder_id: Id; label: string | null; created_at: string; revoked: 0 | 1 }
 export interface DocsState { storage: 'r2' | 'db'; vault: Vault | null; folders: DocFolder[]; documents: DocItem[]; shares: DocShare[] }
 export interface SharedDocs { folder: Pick<DocFolder, 'id' | 'name' | 'trip_id'>; folders: Pick<DocFolder, 'id' | 'name' | 'parent_id'>[]; documents: Omit<DocItem, 'storage_key'>[] }
+
+// --- trip plan: the board behind each trip ---------------------------------------------------------------------
+export type PlanKind = 'day' | 'task' | 'pack' | 'stay' | 'link' | 'note';
+export interface PlanMeta { price?: number | null; distance?: string | null; chosen?: boolean }
+export interface PlanItem {
+  id: Id;
+  trip_id: Id;
+  kind: PlanKind;
+  title: string;
+  body: string | null; // a URL for stay and link items, free text otherwise
+  meta: PlanMeta | null;
+  day: string | null; // itinerary entries: the date they belong to
+  done: 0 | 1;
+  assignee_id: Id | null;
+  sort: number;
+  created_by: Id | null;
+  created_at: string;
+}
+export interface PlanVote { item_id: Id; person_id: Id }
