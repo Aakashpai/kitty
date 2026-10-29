@@ -281,7 +281,8 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
   const crumbs = pathTo(folders, current.id);
   const tripName = (f: DocFolder) => (f.trip_id != null ? trips.get(f.trip_id)?.name ?? f.name : f.name);
   const tripsWithout = state.trips.filter((t) => !t.archived && !roots.some((f) => f.trip_id === t.id));
-  const canDeleteFolder = current.parent_id != null && !docs.length && !subfolders.length;
+  const canDeleteFolder = (current.parent_id != null || current.trip_id != null) && !docs.length && !subfolders.length; // Personal stays; empty trip folders and subfolders can go
+  const used = d.documents.reduce((sum, x) => sum + x.size, 0);
   return (
     <div className="docs">
       <nav className="nav doc-nav" aria-label="Folders">
@@ -298,7 +299,7 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
             <button disabled={busy} onClick={() => setNaming({ kind: 'folder', value: '' })}><FolderPlus />New folder</button>
             {current.parent_id == null && current.trip_id != null && <button disabled={busy} onClick={() => setShare(true)} data-testid="doc-share"><Link2 />{d.shares.some((s) => s.folder_id === current.id) ? 'Shared' : 'Share'}</button>}
             {current.parent_id != null && <button className="ghost small" onClick={() => setNaming({ kind: 'folder', id: current.id, value: current.name })}><Pencil />Rename</button>}
-            {canDeleteFolder && <DangerButton confirm={`Delete the empty folder "${current.name}"?`} onConfirm={async () => { await api('DELETE', `/api/docs/folders/${current.id}`); window.location.hash = `#/docs/${current.parent_id}`; await reload(); }}>Delete folder</DangerButton>}
+            {canDeleteFolder && <DangerButton confirm={`Delete the empty folder "${tripName(current)}"?`} onConfirm={async () => { await api('DELETE', `/api/docs/folders/${current.id}`); window.location.hash = current.parent_id != null ? `#/docs/${current.parent_id}` : '#/docs'; await reload(); }}>Delete folder</DangerButton>}
           </div>
         </div>
         {naming && (
@@ -313,6 +314,7 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
         <ErrorBox error={err} />
         <DocRows docs={docs} onOpen={open} onRename={(doc) => setNaming({ kind: 'doc', id: doc.id, value: doc.name })} onDelete={async (doc) => { await api('DELETE', `/api/docs/${doc.id}`); await reload(); }} />
         <div className={`dropzone${over ? ' over' : ''}`}>Drop files here, or use Upload. Each file is encrypted in this browser before it is stored{d.storage === 'db' ? ', in the ledger’s own database' : ''}.</div>
+        <div className="faint small" data-testid="doc-usage">{d.documents.length} file{d.documents.length === 1 ? '' : 's'} · {fmtBytes(used)} stored{d.storage === 'r2' ? ' of the 10 GB free on Cloudflare R2' : ''}</div>
       </div>
       {preview && <Preview doc={preview.doc} url={preview.url} onClose={() => setPreview(null)} />}
       {share && <DocShareModal folder={root} name={tripName(root)} shares={d.shares.filter((s) => s.folder_id === root.id)} keyFor={() => keyFor(root)} reload={reload} onClose={() => setShare(false)} />}
