@@ -231,3 +231,28 @@ export const emptyTx = (type: TxType = 'expense', date = new Date().toISOString(
   full_settlement: 0,
   splits: [],
 });
+
+// --- documents: encrypted in the browser; the server keeps wrapped keys and metadata only ---------------------
+export interface Vault { salt: string; check_iv: string; check_ct: string }
+export interface DocFolder {
+  id: Id;
+  name: string;
+  parent_id: Id | null;
+  trip_id: Id | null;
+  key_iv: string | null; // top-level folders only: the folder key wrapped under the master key
+  key_ct: string | null;
+  created_at: string;
+}
+export interface DocItem {
+  id: Id;
+  folder_id: Id;
+  name: string;
+  mime: string;
+  size: number;
+  storage_key: string;
+  iv: string;
+  created_at: string;
+}
+export interface DocShare { id: Id; token: string; folder_id: Id; label: string | null; created_at: string; revoked: 0 | 1 }
+export interface DocsState { storage: 'r2' | 'local' | null; vault: Vault | null; folders: DocFolder[]; documents: DocItem[]; shares: DocShare[] }
+export interface SharedDocs { folder: Pick<DocFolder, 'id' | 'name' | 'trip_id'>; folders: Pick<DocFolder, 'id' | 'name' | 'parent_id'>[]; documents: Omit<DocItem, 'storage_key'>[] }

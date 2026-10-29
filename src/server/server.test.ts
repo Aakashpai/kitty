@@ -1,10 +1,14 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeBalances, pairwiseDebts, type LedgerState, type Tx } from '../engine/index.ts';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp } from './app.ts';
 import { seed } from './seed.ts';
 
 const SECRET = 'test-secret';
+process.env.DOCS_DIR = mkdtempSync(join(tmpdir(), 'kitty-docs-')); // local document blobs for the tests
 const boot = async () => {
   const app = await createApp({ url: ':memory:', staticDir: null, secret: SECRET });
   await new Promise<void>((r) => app.server.listen(0, r));
@@ -277,6 +281,55 @@ test('owner can be provisioned from configuration and can change their password'
     pre.server.close();
     pre.db.close();
   }
+});
+
+test('documents: vault, folders, encrypted blobs through signed URLs, share links, cleanup', async () => {
+  const b64 = (n: number) => Buffer.from(Array.from({ length: n }, (_, i) => i % 251)).toString('base64url');
+  assert.equal((await anon.call('GET', '/api/docs')).status, 401);
+  const empty = (await owner.ok('GET', '/api/docs')) as unknown as { storage: string; vault: unknown; folders: unknown[] };
+  assert.equal(empty.storage, 'local');
+  assert.equal(empty.vault, null);
+  await owner.ok('POST', '/api/docs/vault', { salt: b64(16), check_iv: b64(12), check_ct: b64(32) });
+  assert.equal((await owner.call('POST', '/api/docs/vault', { salt: b64(16), check_iv: b64(12), check_ct: b64(32) })).status, 409, 'vault is created once');
+  assert.equal((await owner.call('POST', '/api/docs/folders', { name: 'Personal' })).status, 400, 'a top-level folder needs its wrapped key');
+  const personal = (await owner.ok('POST', '/api/docs/folders', { name: 'Personal', key_iv: b64(12), key_ct: b64(40) })) as unknown as { id: number };
+  const sub = (await owner.ok('POST', '/api/docs/folders', { name: 'Visa', parent_id: personal.id })) as unknown as { id: number; key_ct: string | null };
+  assert.equal(sub.key_ct, null, 'subfolders inherit the top-level key');
+  // upload: a signed PUT, then register the blob
+  assert.equal((await owner.call('POST', '/api/docs/upload', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 0 })).status, 400);
+  const slot = (await owner.ok('POST', '/api/docs/upload', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 5 })) as unknown as { storage_key: string; url: string; method: string };
+  assert.equal(slot.method, 'PUT');
+  const cipher = Buffer.from('hello');
+  assert.equal((await fetch(app.base + slot.url, { method: 'PUT', body: cipher })).status, 200);
+  assert.equal((await fetch(app.base + slot.url.replace(/sig=.*$/, 'sig=bad'), { method: 'PUT', body: cipher })).status, 403, 'the signature is the permission');
+  const doc = (await owner.ok('POST', '/api/docs', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 5, storage_key: slot.storage_key, iv: b64(12) })) as unknown as { id: number };
+  assert.equal((await owner.call('POST', '/api/docs', { folder_id: sub.id, name: 'x', mime: 'text/plain', size: 1, storage_key: '../../etc/passwd', iv: b64(12) })).status, 400);
+  const got = (await owner.ok('GET', `/api/docs/${doc.id}/url`)) as unknown as { url: string };
+  assert.equal(Buffer.from(await (await fetch(app.base + got.url)).arrayBuffer()).toString(), 'hello', 'the blob comes back untouched');
+  const listed = (await owner.ok('GET', '/api/docs')) as unknown as { folders: unknown[]; documents: { id: number }[] };
+  assert.equal(listed.folders.length, 2);
+  assert.deepEqual(listed.documents.map((d) => d.id), [doc.id]);
+  // share the top-level folder: its subfolders and files come with it, storage keys do not
+  assert.equal((await owner.call('POST', '/api/docs/shares', { folder_id: sub.id })).status, 400, 'only top-level folders are shared');
+  const share = (await owner.ok('POST', '/api/docs/shares', { folder_id: personal.id, label: 'Trip mates' })) as unknown as { id: number; token: string };
+  const view = (await anon.ok('GET', `/api/docs/shared/${share.token}`)) as unknown as { folder: { id: number }; folders: { id: number }[]; documents: Record<string, unknown>[] };
+  assert.equal(view.folder.id, personal.id);
+  assert.deepEqual(view.folders.map((f) => f.id), [sub.id]);
+  assert.equal(view.documents.length, 1);
+  assert.ok(!('storage_key' in view.documents[0]!), 'storage keys stay private');
+  const shared = (await anon.ok('GET', `/api/docs/shared/${share.token}/${doc.id}/url`)) as unknown as { url: string };
+  assert.equal((await fetch(app.base + shared.url)).status, 200);
+  assert.equal((await anon.call('GET', `/api/docs/shared/${share.token}/999/url`)).status, 404);
+  assert.equal((await anon.call('POST', '/api/docs/folders', { name: 'x' })).status, 401, 'a link never grants write access');
+  await owner.ok('DELETE', `/api/docs/shares/${share.id}`);
+  assert.equal((await anon.call('GET', `/api/docs/shared/${share.token}`)).status, 404, 'revoked');
+  // password change re-wraps the top-level keys
+  await owner.ok('PUT', '/api/docs/vault', { salt: b64(16), check_iv: b64(12), check_ct: b64(32), folders: [{ id: personal.id, key_iv: b64(12), key_ct: b64(48) }] });
+  // deleting the top-level folder removes the tree, the rows and the blob
+  await owner.ok('DELETE', `/api/docs/folders/${personal.id}`);
+  assert.equal((await fetch(app.base + got.url)).status, 404, 'blob gone');
+  const after = (await owner.ok('GET', '/api/docs')) as unknown as { folders: unknown[]; documents: unknown[] };
+  assert.deepEqual([after.folders.length, after.documents.length], [0, 0]);
 });
 
 test('login lockout after repeated failures (runs last: it locks this IP)', async () => {

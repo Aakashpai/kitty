@@ -5,6 +5,7 @@ import { ACCOUNT_TYPES, allocate, formatAmount, guessCategory, normalizeTx, pars
 import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
+import { isStorageKey, localStorage_, storageFromEnv } from './storage.ts';
 import { announce, publicKey } from './push.ts';
 
 interface Ctx {
@@ -132,11 +133,11 @@ export async function createApp(opts: AppOptions) {
     await db.createUser({ email: email(owner.email), name: str(owner.name, 'Name'), password_hash: await hashPassword(password(owner.password)), role: 'owner', person_id: me.id });
   }
   const limiter = new RateLimiter();
-  const routes: { method: string; re: RegExp; keys: string[]; access: Access; handler: Handler }[] = [];
-  const route = (method: string, path: string, access: Access, handler: Handler) => {
+  const routes: { method: string; re: RegExp; keys: string[]; access: Access; handler: Handler; raw: boolean }[] = [];
+  const route = (method: string, path: string, access: Access, handler: Handler, opts: { raw?: boolean } = {}) => {
     const keys: string[] = [];
     const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k: string) => (keys.push(k), '([A-Za-z0-9_-]+)')) + '$');
-    routes.push({ method, re, keys, access, handler });
+    routes.push({ method, re, keys, access, handler, raw: !!opts.raw });
   };
   const ctxOf = async (user: UserPublic | null) => db.loadState(user);
   const isOwner = (c: Ctx) => c.user?.role === 'owner';
@@ -439,6 +440,86 @@ export async function createApp(opts: AppOptions) {
     return { file };
   });
 
+  // --- documents: encrypted in the browser; the API keeps wrapped keys and hands out short-lived storage URLs --
+  const storage = storageFromEnv(secret);
+  const needStorage = () => {
+    if (!storage) throw new HttpError(503, 'Document storage is not set up. Add R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET to the environment.');
+    return storage;
+  };
+  const b64 = (v: unknown, label: string) => {
+    const s = String(v ?? '');
+    if (!/^[A-Za-z0-9_-]{8,4096}$/.test(s)) throw new HttpError(400, `${label} is not valid`);
+    return s;
+  };
+  const optId = (v: unknown, label: string) => (v == null || v === '' ? null : int(v, label));
+  const MAX_DOC = 200 * 1024 * 1024;
+  route('GET', '/api/docs', 'owner', async () => ({ storage: storage?.kind ?? null, ...(await db.docsState()) }));
+  route('POST', '/api/docs/vault', 'owner', async (c) => (await db.createVault({ salt: b64(c.body.salt, 'Salt'), check_iv: b64(c.body.check_iv, 'Check'), check_ct: b64(c.body.check_ct, 'Check') }), { ok: true }));
+  route('PUT', '/api/docs/vault', 'owner', async (c) => {
+    const folders = (Array.isArray(c.body.folders) ? c.body.folders : []).map((f) => {
+      const o = (f ?? {}) as Record<string, unknown>;
+      return { id: int(o.id, 'Folder'), key_iv: b64(o.key_iv, 'Key'), key_ct: b64(o.key_ct, 'Key') };
+    });
+    await db.rewrapVault({ salt: b64(c.body.salt, 'Salt'), check_iv: b64(c.body.check_iv, 'Check'), check_ct: b64(c.body.check_ct, 'Check') }, folders);
+    return { ok: true };
+  });
+  route('POST', '/api/docs/folders', 'owner', async (c) => db.createFolder({ name: str(c.body.name, 'Name'), parent_id: optId(c.body.parent_id, 'Folder'), trip_id: optId(c.body.trip_id, 'Trip'), key_iv: c.body.key_iv == null ? null : b64(c.body.key_iv, 'Key'), key_ct: c.body.key_ct == null ? null : b64(c.body.key_ct, 'Key') }));
+  route('PUT', '/api/docs/folders/:id', 'owner', async (c) => (await db.renameFolder(Number(c.params.id), str(c.body.name, 'Name')), { ok: true }));
+  route('DELETE', '/api/docs/folders/:id', 'owner', async (c) => {
+    const keys = await db.deleteFolder(Number(c.params.id));
+    if (storage) await Promise.allSettled(keys.map((k) => storage.remove(k)));
+    return { ok: true };
+  });
+  route('POST', '/api/docs/upload', 'owner', async (c) => {
+    const s = needStorage();
+    const folder = await db.getFolder(int(c.body.folder_id, 'Folder'));
+    const size = int(c.body.size, 'Size');
+    if (size <= 0 || size > MAX_DOC) throw new HttpError(400, 'Files can be up to 200 MB');
+    const storage_key = `d${folder.id}_${randomToken(18)}`;
+    return { storage_key, ...(await s.uploadUrl(storage_key)) };
+  });
+  route('POST', '/api/docs/shares', 'owner', async (c) => db.createDocShare({ token: randomToken(18), folder_id: int(c.body.folder_id, 'Folder'), label: optStr(c.body.label) }));
+  route('DELETE', '/api/docs/shares/:id', 'owner', async (c) => (await db.revokeDocShare(Number(c.params.id)), { ok: true }));
+  const docShare = async (token: string) => {
+    const s = await db.docShareByToken(token);
+    if (!s) throw new HttpError(404, 'This link has been turned off or never existed.');
+    return s;
+  };
+  route('GET', '/api/docs/shared/:token', 'public', async (c) => db.sharedDocs((await docShare(c.params.token ?? '')).folder_id));
+  route('GET', '/api/docs/shared/:token/:id/url', 'public', async (c) => {
+    const share = await docShare(c.params.token ?? '');
+    const doc = await db.getDocument(Number(c.params.id));
+    if (!(await db.folderWithin(doc.folder_id, share.folder_id))) throw new HttpError(404, 'Document not found');
+    return { url: await needStorage().downloadUrl(doc.storage_key) };
+  });
+  if (storage?.kind === 'local') {
+    // Development only: the signed URL itself is the permission, like a presigned bucket URL would be.
+    const local = storage as ReturnType<typeof localStorage_>;
+    const check = (c: Ctx, method: string) => {
+      const key = c.params.key ?? '';
+      if (!local.verify(key, method, c.url.searchParams.get('exp') ?? '', c.url.searchParams.get('sig') ?? '')) throw new HttpError(403, 'This link is not valid any more');
+      return key;
+    };
+    route('PUT', '/api/docs/blob/:key', 'public', async (c) => (local.write(check(c, 'PUT'), await readRaw(c.req, MAX_DOC)), { ok: true }), { raw: true });
+    route('GET', '/api/docs/blob/:key', 'public', async (c) => {
+      const data = local.read(check(c, 'GET'));
+      if (!data) throw new HttpError(404, 'Not found');
+      return new Raw('application/octet-stream', data);
+    });
+  }
+  route('POST', '/api/docs', 'owner', async (c) => {
+    const storage_key = String(c.body.storage_key ?? '');
+    if (!isStorageKey(storage_key) || !storage_key.startsWith('d')) throw new HttpError(400, 'Storage key is not valid');
+    return db.createDocument({ folder_id: int(c.body.folder_id, 'Folder'), name: str(c.body.name, 'Name', 200), mime: str(c.body.mime, 'Type', 100), size: int(c.body.size, 'Size'), storage_key, iv: b64(c.body.iv, 'IV') });
+  });
+  route('GET', '/api/docs/:id/url', 'owner', async (c) => ({ url: await needStorage().downloadUrl((await db.getDocument(Number(c.params.id))).storage_key) }));
+  route('PUT', '/api/docs/:id', 'owner', async (c) => (await db.renameDocument(Number(c.params.id), str(c.body.name, 'Name', 200)), { ok: true }));
+  route('DELETE', '/api/docs/:id', 'owner', async (c) => {
+    const key = await db.deleteDocument(Number(c.params.id));
+    if (storage) await storage.remove(key).catch(() => undefined);
+    return { ok: true };
+  });
+
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const send = (status: number, body: unknown) => {
@@ -458,7 +539,7 @@ export async function createApp(opts: AppOptions) {
         if (r.access === 'owner' && user?.role !== 'owner') return send(403, { error: 'Only the owner can do that' });
         const m = r.re.exec(url.pathname)!;
         const params = Object.fromEntries(r.keys.map((k, i) => [k, m[i + 1] ?? '']));
-        const body = ['POST', 'PUT'].includes(req.method ?? '') ? await readJson(req) : {};
+        const body = !r.raw && ['POST', 'PUT'].includes(req.method ?? '') ? await readJson(req) : {};
         const out = await r.handler({ params, body, url, req, res, user });
         if (out instanceof Raw) {
           res.writeHead(200, { 'content-type': out.type, 'cache-control': 'private, max-age=31536000, immutable' }); // a receipt never changes; removing it retires the id
@@ -518,4 +599,19 @@ function parseBody(text: string): Record<string, unknown> {
   } catch {
     throw new HttpError(400, 'Invalid JSON body');
   }
+}
+
+/** The whole request body as bytes (local document uploads only; production uploads go straight to the bucket). */
+function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((ok, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > max) reject(new HttpError(413, 'File too large'));
+      else chunks.push(c);
+    });
+    req.on('end', () => ok(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }

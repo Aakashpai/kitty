@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { ArrowRightLeft, ChartColumn, FileInput, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
+import { ArrowRightLeft, ChartColumn, FileInput, FolderLock, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { parseReceipt, type Trip, type TxInput, type Tx } from '../engine/index.ts';
 import { dropQueued, flushQueue, queued } from './api.ts';
 import { LedgerProvider, guessCategory, useLedger } from './store.tsx';
@@ -19,6 +19,9 @@ import { Reports } from './pages/Reports.tsx';
 import { InviteAccept } from './pages/Auth.tsx';
 import { SharedPage } from './pages/Shared.tsx';
 import { SimpleView } from './pages/Simple.tsx';
+import { Docs } from './pages/Docs.tsx';
+import { DocsShared } from './pages/DocsShared.tsx';
+import { forgetMaster } from './vault.ts';
 import { TxFormCtx, useTxForm, type OpenTxForm } from './components/txFormContext.ts';
 import { APP_NAME, Avatar, Logo, TripMark, hueStyle } from './components/ui.tsx';
 import { AccountModal } from './components/AccountModal.tsx';
@@ -32,6 +35,7 @@ const NAV: [string, string, LucideIcon][] = [
   ['balances', 'Balances & Settlement', Scale],
   ['imports', 'Imports & Reconciliation', FileInput],
   ['reports', 'Reports & Exports', ChartColumn],
+  ['docs', 'Documents', FolderLock],
 ];
 
 const useTheme = () => {
@@ -138,6 +142,7 @@ function Shell() {
       case 'balances': return <Balances />;
       case 'imports': return <Imports />;
       case 'reports': return <Reports />;
+      case 'docs': return <Docs folderId={id} />;
       default: return <Overview />;
     }
   })();
@@ -151,7 +156,7 @@ function Shell() {
             <span className="row">
               <button className="ghost small" onClick={toggleSimple} data-testid="simple-toggle"><LayoutGrid />Full view</button>
               <button className="ghost icon small" onClick={toggleTheme} aria-label="Toggle theme" data-testid="theme-toggle">{theme === 'dark' ? <Sun /> : <Moon />}</button>
-              {user && <button className="ghost icon small" onClick={() => void logout()} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>}
+              {user && <button className="ghost icon small" onClick={() => { forgetMaster(); void logout(); }} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>}
             </span>
           </header>
           <main className="main simple-main"><QueueBanner /><SimpleView scope={scope} onScope={setScope} /></main>
@@ -188,7 +193,7 @@ function Shell() {
               <div className="user-block" data-testid="user-block">
                 <Avatar id={user.person_id ?? 0} name={user.name} small />
                 <button type="button" className="info" onClick={() => setAccount(true)} title="Account settings" data-testid="account-button"><div>{user.name}</div><div className="faint small">{user.email}</div></button>
-                <button className="ghost icon small" onClick={() => void logout()} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>
+                <button className="ghost icon small" onClick={() => { forgetMaster(); void logout(); }} title="Sign out" aria-label="Sign out" data-testid="logout"><LogOut /></button>
               </div>
             )}
           </div>
@@ -275,6 +280,7 @@ export function App() {
     return () => { mo.disconnect(); cancelAnimationFrame(raf); };
   }, []);
   if (section === 'invite' && parts[1]) return <ErrorBoundary><InviteAccept token={parts[1]} /></ErrorBoundary>;
+  if (section === 'docs' && parts[1] === 's' && parts[2]) return <ErrorBoundary><DocsShared token={parts[2]} keyB64={parts[3] ?? ''} /></ErrorBoundary>;
   if (section === 's' && parts[1]) return <ErrorBoundary><SharedPage token={parts[1]} simple={parts[2] === 'simple'} /></ErrorBoundary>;
   return (
     <ErrorBoundary>

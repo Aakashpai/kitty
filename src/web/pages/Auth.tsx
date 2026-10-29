@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { api, errorText } from '../api.ts';
+import type { Vault } from '../../engine/index.ts';
+import { deriveMasterKey, passesCheck, rememberMaster } from '../vault.ts';
 import { APP_NAME, ErrorBox, Field, Logo } from '../components/ui.tsx';
 
 function AuthFrame({ title, sub, children }: { title: string; sub: string; children: React.ReactNode }) {
@@ -55,6 +57,14 @@ export function Login({ onDone }: { onDone: () => void }) {
     setBusy(true);
     try {
       await api('POST', '/api/auth/login', f);
+      // The owner's documents are encrypted under a key derived from this password: derive it now so the vault opens without asking again.
+      try {
+        const d = await api<{ vault: Vault | null }>('GET', '/api/docs');
+        if (d.vault) {
+          const master = await deriveMasterKey(f.password, d.vault.salt);
+          if (await passesCheck(master, d.vault.check_iv, d.vault.check_ct)) await rememberMaster(master);
+        }
+      } catch { /* members have no vault; the Documents page asks the owner if needed */ }
       onDone();
     } catch (x) {
       setErr(errorText(x));

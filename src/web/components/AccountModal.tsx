@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Bell, BellOff } from 'lucide-react';
-import { api, errorText } from '../api.ts';
+import { ApiError, api, errorText } from '../api.ts';
+import type { DocsState } from '../../engine/index.ts';
+import { deriveMasterKey, makeCheck, newSalt, passesCheck, rememberMaster, unwrapKey, wrapKey } from '../vault.ts';
 import { useLedger } from '../store.tsx';
 import { ErrorBox, Field, Modal } from './ui.tsx';
 
@@ -74,7 +76,31 @@ export function AccountModal({ onClose }: { onClose: () => void }) {
     if (f.next !== f.confirm) return setErr('New passwords do not match');
     setBusy(true);
     try {
-      await api('POST', '/api/auth/password', { current: f.current, next: f.next });
+      // Documents are encrypted under a key derived from the password, so the folder keys are re-wrapped first.
+      let revert: (() => Promise<unknown>) | null = null;
+      try {
+        const d = await api<DocsState>('GET', '/api/docs');
+        if (d.vault) {
+          const oldMaster = await deriveMasterKey(f.current, d.vault.salt);
+          if (!(await passesCheck(oldMaster, d.vault.check_iv, d.vault.check_ct))) throw new Error('Current password is wrong');
+          const salt = newSalt();
+          const newMaster = await deriveMasterKey(f.next, salt);
+          const roots = d.folders.filter((x) => x.parent_id == null && x.key_iv && x.key_ct);
+          const folders = await Promise.all(roots.map(async (x) => ({ id: x.id, ...(await wrapKey(newMaster, await unwrapKey(oldMaster, x.key_iv!, x.key_ct!))) })));
+          const before = { salt: d.vault.salt, check_iv: d.vault.check_iv, check_ct: d.vault.check_ct, folders: roots.map((x) => ({ id: x.id, key_iv: x.key_iv!, key_ct: x.key_ct! })) };
+          await api('PUT', '/api/docs/vault', { salt, ...(await makeCheck(newMaster)), folders });
+          revert = () => api('PUT', '/api/docs/vault', before);
+          await rememberMaster(newMaster);
+        }
+      } catch (x) {
+        if (!(x instanceof ApiError && x.status === 403)) throw x; // members have no vault
+      }
+      try {
+        await api('POST', '/api/auth/password', { current: f.current, next: f.next });
+      } catch (x) {
+        await revert?.().catch(() => undefined);
+        throw x;
+      }
       setDone(true);
       setErr(null);
       setF({ current: '', next: '', confirm: '' });

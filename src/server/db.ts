@@ -1,6 +1,7 @@
 import { createClient, LibsqlError, type Client, type InValue } from '@libsql/client';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { DocFolder, DocItem, DocShare, SharedDocs, Vault } from '../engine/index.ts';
 import { formatAmount, validateTx, type Account, type Activity, type Comment, type Id, type Invite, type LedgerState, type Person, type Reconciliation, type Recurring, type Share, type Trip, type TripBudget, type Tx, type TxInput, type UserPublic } from '../engine/index.ts';
 
 // Each entry runs once, in order; schema_migrations remembers which have been applied.
@@ -205,6 +206,42 @@ const MIGRATIONS: string[] = [
     last_used_at TEXT
   );
   `,
+  `
+  CREATE TABLE vault (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    salt TEXT NOT NULL,
+    check_iv TEXT NOT NULL,
+    check_ct TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE doc_folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES doc_folders(id) ON DELETE CASCADE,
+    trip_id INTEGER REFERENCES trips(id) ON DELETE SET NULL,
+    key_iv TEXT,
+    key_ct TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id INTEGER NOT NULL REFERENCES doc_folders(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    storage_key TEXT NOT NULL UNIQUE,
+    iv TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE doc_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    folder_id INTEGER NOT NULL REFERENCES doc_folders(id) ON DELETE CASCADE,
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revoked INTEGER NOT NULL DEFAULT 0
+  );
+  `,
 ];
 
 const parseBudget = (v: unknown): TripBudget | null => {
@@ -261,7 +298,7 @@ const parseItems = (tx: Tx) => {
 };
 // Receipt photos stay out of the JSON backup: a few of them would pass the 4.5 MB response limit on Vercel.
 // Phone subscriptions stay out too: they belong to devices, not to the ledger.
-const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring', 'comments'] as const;
+const BACKUP_TABLES = ['settings', 'people', 'accounts', 'trips', 'trip_members', 'transactions', 'splits', 'reconciliations', 'activity', 'users', 'invites', 'shares', 'recurring', 'comments', 'vault', 'doc_folders', 'documents', 'doc_shares'] as const;
 const USER_COLS = 'id, email, name, role, person_id, created_at, seen_at';
 const INSERT_TX = `INSERT INTO transactions (${TX_COLS.join(', ')}, added_by, recurring_id, client_ref) VALUES (${TX_COLS.map(() => '?').join(', ')}, ?, ?, ?) RETURNING id`;
 
@@ -337,6 +374,13 @@ export async function openDb(url: string, authToken?: string) {
   const logIn = (t: Q, action: Activity['action'], entity: string, entity_id: Id | null, summary: string, payload?: unknown) =>
     t.run('INSERT INTO activity (action, entity, entity_id, summary, payload) VALUES (?, ?, ?, ?, ?)', [action, entity, entity_id, summary, payload === undefined ? null : JSON.stringify(payload)]);
 
+  /** A folder and every folder under it (ids), or [] when it does not exist. */
+  const folderTree = async (t: Q, id: Id): Promise<Id[]> => {
+    if (!(await t.get('SELECT 1 FROM doc_folders WHERE id = ?', [id]))) return [];
+    const ids: Id[] = [id];
+    for (let i = 0; i < ids.length; i++) for (const k of await t.all<{ id: Id }>('SELECT id FROM doc_folders WHERE parent_id = ?', [ids[i]!])) ids.push(k.id);
+    return ids;
+  };
   const loadTx = async (t: Q, id: Id): Promise<Tx> => {
     const row = await t.get<Tx>('SELECT * FROM transactions WHERE id = ?', [id]);
     if (!row) throw new HttpError(404, 'Transaction not found');
@@ -758,7 +802,7 @@ export async function openDb(url: string, authToken?: string) {
 
     restore: (data: Record<string, unknown>) => inTx(async (t) => {
       if (data.format !== 'ledger-backup' || !Array.isArray(data.people) || !Array.isArray(data.transactions)) throw new HttpError(400, 'Not a ledger backup file');
-      const tables = BACKUP_TABLES.filter((name) => Array.isArray(data[name]) || !['users', 'invites', 'shares'].includes(name));
+      const tables = BACKUP_TABLES.filter((name) => Array.isArray(data[name]) || !['users', 'invites', 'shares', 'vault', 'doc_folders', 'documents', 'doc_shares'].includes(name));
       for (const table of [...tables].reverse()) await t.run(`DELETE FROM ${table}`);
       for (const table of tables) {
         for (const row of (data[table] as Row[] | undefined) ?? []) {
@@ -770,6 +814,102 @@ export async function openDb(url: string, authToken?: string) {
       await t.run('DELETE FROM receipts WHERE tx_id NOT IN (SELECT id FROM transactions)');
       await logIn(t, 'restore', 'ledger', null, `Restored backup from ${String(data.exported_at ?? 'unknown date')}`);
     }),
+    // --- documents: encrypted in the browser; here only wrapped keys, names and sizes --------------------------
+    docsState: () => read(async (t) => ({
+      vault: (await t.get<Vault>('SELECT salt, check_iv, check_ct FROM vault WHERE id = 1')) ?? null,
+      folders: await t.all<DocFolder>('SELECT * FROM doc_folders ORDER BY (trip_id IS NOT NULL), LOWER(name), id'),
+      documents: await t.all<DocItem>('SELECT * FROM documents ORDER BY created_at DESC, id DESC'),
+      shares: await t.all<DocShare>('SELECT * FROM doc_shares WHERE revoked = 0 ORDER BY id DESC'),
+    })),
+    createVault: (v: Vault) => inTx(async (t) => {
+      if (await t.get('SELECT 1 FROM vault WHERE id = 1')) throw new HttpError(409, 'The vault is already set up');
+      await t.run('INSERT INTO vault (id, salt, check_iv, check_ct) VALUES (1, ?, ?, ?)', [v.salt, v.check_iv, v.check_ct]);
+      await logIn(t, 'create', 'vault', 1, 'Set up the document vault');
+    }),
+    rewrapVault: (v: Vault, folders: { id: Id; key_iv: string; key_ct: string }[]) => inTx(async (t) => {
+      if (!(await t.run('UPDATE vault SET salt = ?, check_iv = ?, check_ct = ? WHERE id = 1', [v.salt, v.check_iv, v.check_ct])).changes) throw new HttpError(404, 'No vault yet');
+      for (const f of folders) await t.run('UPDATE doc_folders SET key_iv = ?, key_ct = ? WHERE id = ? AND parent_id IS NULL', [f.key_iv, f.key_ct, f.id]);
+      await logIn(t, 'update', 'vault', 1, 'Re-keyed the document vault after a password change');
+    }),
+    getFolder: (id: Id) => read(async (t) => {
+      const f = await t.get<DocFolder>('SELECT * FROM doc_folders WHERE id = ?', [id]);
+      if (!f) throw new HttpError(404, 'Folder not found');
+      return f;
+    }),
+    createFolder: (f: { name: string; parent_id: Id | null; trip_id: Id | null; key_iv: string | null; key_ct: string | null }) => inTx(async (t) => {
+      if (f.parent_id != null && !(await t.get('SELECT 1 FROM doc_folders WHERE id = ?', [f.parent_id]))) throw new HttpError(404, 'Folder not found');
+      if (f.parent_id == null && !(f.key_iv && f.key_ct)) throw new HttpError(400, 'A top-level folder needs its wrapped key');
+      if (f.trip_id != null && !(await t.get('SELECT 1 FROM trips WHERE id = ?', [f.trip_id]))) throw new HttpError(404, 'Trip not found');
+      if (f.trip_id != null && (await t.get('SELECT 1 FROM doc_folders WHERE trip_id = ? AND parent_id IS NULL', [f.trip_id]))) throw new HttpError(409, 'This trip already has a folder');
+      const top = f.parent_id == null;
+      const row = (await t.get<{ id: number }>('INSERT INTO doc_folders (name, parent_id, trip_id, key_iv, key_ct) VALUES (?, ?, ?, ?, ?) RETURNING id', [f.name, f.parent_id, top ? f.trip_id : null, top ? f.key_iv : null, top ? f.key_ct : null]))!;
+      await logIn(t, 'create', 'folder', row.id, `Created document folder ${f.name}`);
+      return (await t.get<DocFolder>('SELECT * FROM doc_folders WHERE id = ?', [row.id]))!;
+    }),
+    renameFolder: (id: Id, name: string) => inTx(async (t) => {
+      if (!(await t.run('UPDATE doc_folders SET name = ? WHERE id = ?', [name, id])).changes) throw new HttpError(404, 'Folder not found');
+    }),
+    /** Removes a folder tree and its metadata; returns the storage keys so the caller can delete the blobs. */
+    deleteFolder: (id: Id) => inTx(async (t) => {
+      const ids = await folderTree(t, id);
+      if (!ids.length) throw new HttpError(404, 'Folder not found');
+      const marks = ids.map(() => '?').join(', ');
+      const keys = (await t.all<{ storage_key: string }>(`SELECT storage_key FROM documents WHERE folder_id IN (${marks})`, ids)).map((r) => r.storage_key);
+      await t.run(`DELETE FROM documents WHERE folder_id IN (${marks})`, ids);
+      await t.run(`DELETE FROM doc_shares WHERE folder_id IN (${marks})`, ids);
+      await t.run(`DELETE FROM doc_folders WHERE id IN (${marks})`, ids);
+      await logIn(t, 'delete', 'folder', id, `Deleted a document folder (${keys.length} file${keys.length === 1 ? '' : 's'})`);
+      return keys;
+    }),
+    createDocument: (d: Omit<DocItem, 'id' | 'created_at'>) => inTx(async (t) => {
+      if (!(await t.get('SELECT 1 FROM doc_folders WHERE id = ?', [d.folder_id]))) throw new HttpError(404, 'Folder not found');
+      const row = (await t.get<{ id: number }>('INSERT INTO documents (folder_id, name, mime, size, storage_key, iv) VALUES (?, ?, ?, ?, ?, ?) RETURNING id', [d.folder_id, d.name, d.mime, d.size, d.storage_key, d.iv]))!;
+      await logIn(t, 'create', 'document', row.id, `Added document ${d.name}`);
+      return (await t.get<DocItem>('SELECT * FROM documents WHERE id = ?', [row.id]))!;
+    }),
+    getDocument: (id: Id) => read(async (t) => {
+      const d = await t.get<DocItem>('SELECT * FROM documents WHERE id = ?', [id]);
+      if (!d) throw new HttpError(404, 'Document not found');
+      return d;
+    }),
+    renameDocument: (id: Id, name: string) => inTx(async (t) => {
+      if (!(await t.run('UPDATE documents SET name = ? WHERE id = ?', [name, id])).changes) throw new HttpError(404, 'Document not found');
+    }),
+    deleteDocument: (id: Id) => inTx(async (t) => {
+      const d = await t.get<DocItem>('SELECT * FROM documents WHERE id = ?', [id]);
+      if (!d) throw new HttpError(404, 'Document not found');
+      await t.run('DELETE FROM documents WHERE id = ?', [id]);
+      await logIn(t, 'delete', 'document', id, `Deleted document ${d.name}`);
+      return d.storage_key;
+    }),
+    createDocShare: (s: { token: string; folder_id: Id; label: string | null }) => inTx(async (t) => {
+      const f = await t.get<DocFolder>('SELECT * FROM doc_folders WHERE id = ?', [s.folder_id]);
+      if (!f) throw new HttpError(404, 'Folder not found');
+      if (f.parent_id != null) throw new HttpError(400, 'Share the top-level folder; its subfolders come with it');
+      const row = (await t.get<{ id: number }>('INSERT INTO doc_shares (token, folder_id, label) VALUES (?, ?, ?) RETURNING id', [s.token, s.folder_id, s.label]))!;
+      await logIn(t, 'create', 'share', row.id, `Created a view-only link for the documents in ${f.name}`);
+      return (await t.get<DocShare>('SELECT * FROM doc_shares WHERE id = ?', [row.id]))!;
+    }),
+    revokeDocShare: (id: Id) => inTx(async (t) => {
+      if (!(await t.run('UPDATE doc_shares SET revoked = 1 WHERE id = ?', [id])).changes) throw new HttpError(404, 'Link not found');
+      await logIn(t, 'delete', 'share', id, 'Revoked a document link');
+    }),
+    docShareByToken: (token: string) => read((t) => t.get<DocShare>('SELECT * FROM doc_shares WHERE token = ? AND revoked = 0', [token])),
+    /** Everything under one top-level folder, for a share link: no storage keys, no wrapped keys. */
+    sharedDocs: (rootId: Id) => read(async (t): Promise<SharedDocs> => {
+      const root = await t.get<DocFolder>('SELECT id, name, trip_id FROM doc_folders WHERE id = ?', [rootId]);
+      if (!root) throw new HttpError(404, 'This link no longer works');
+      const ids = await folderTree(t, rootId);
+      const marks = ids.map(() => '?').join(', ');
+      return {
+        folder: { id: root.id, name: root.name, trip_id: root.trip_id },
+        folders: await t.all<Pick<DocFolder, 'id' | 'name' | 'parent_id'>>(`SELECT id, name, parent_id FROM doc_folders WHERE id IN (${marks}) AND id != ? ORDER BY LOWER(name)`, [...ids, rootId]),
+        documents: await t.all<Omit<DocItem, 'storage_key'>>(`SELECT id, folder_id, name, mime, size, iv, created_at FROM documents WHERE folder_id IN (${marks}) ORDER BY created_at DESC, id DESC`, ids),
+      };
+    }),
+    /** True when `folderId` sits inside the tree rooted at `rootId`. */
+    folderWithin: (folderId: Id, rootId: Id) => read(async (t) => (await folderTree(t, rootId)).includes(folderId)),
+
     snapshot: async (path: string) => {
       if (!isLocal(url)) throw new HttpError(400, 'Snapshots are only available for a local database file; download a JSON backup instead.');
       mkdirSync(dirname(path), { recursive: true });
