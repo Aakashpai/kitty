@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, formatAmount, pairwiseDebts, settlementPlan, type Id, type Tx } from '../../engine/index.ts';
 import { useLedger } from '../store.tsx';
 import { ExportButton, TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
@@ -9,6 +9,7 @@ import { Avatar, Money, MoneyList } from '../components/ui.tsx';
 import { ScopeSeg, inScope } from './Transactions.tsx';
 
 const RECENT = 8;
+const readSettleMode = () => { try { return localStorage.getItem('settle-mode') === 'simple'; } catch { return false; } };
 
 /** Phone-first summary: your position, who pays whom, what was spent, latest entries. Used by the in-app "Simple view" and by simple share links. */
 export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string; onScope?: (s: string) => void; focus?: Id }) {
@@ -16,13 +17,17 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<Tx | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
+  const [simplify, setSimplifyState] = useState(readSettleMode);
+  const setSimplify = (v: boolean) => { setSimplifyState(v); try { localStorage.setItem('settle-mode', v ? 'simple' : 'exact'); } catch { /* private mode */ } };
   // A person share link, or the admin opening someone from People: the page speaks about that person and shows only their entries.
   const focus = focusProp ?? (readOnly && state.shared_person_id != null ? me.id : null);
   const subject = focus ?? me.id;
   const involves = (t: Tx, p: Id) => t.payer_id === p || t.payee_id === p || t.splits.some((s) => s.person_id === p);
-  const txs = useMemo(() => state.transactions.filter((t) => inScope(t, scope) && (focus == null || involves(t, focus))), [state.transactions, scope, focus]);
-  const b = useMemo(() => computeBalances(txs), [txs]);
-  const h = useMemo(() => computeHomeBalances(txs, rateCtx), [txs, rateCtx]);
+  const scopeTxs = useMemo(() => state.transactions.filter((t) => inScope(t, scope)), [state.transactions, scope]);
+  const txs = useMemo(() => scopeTxs.filter((t) => focus == null || involves(t, focus)), [scopeTxs, focus]);
+  // Balances come from everything in scope, so the simplified plan is the group's plan, not one person's slice of it.
+  const b = useMemo(() => computeBalances(scopeTxs), [scopeTxs]);
+  const h = useMemo(() => computeHomeBalances(scopeTxs, rateCtx), [scopeTxs, rateCtx]);
   const home = rateCtx.home;
   const trip = /^\d+$/.test(scope) ? rateCtx.trips.find((t) => t.id === Number(scope)) : undefined;
   const myNet = b.net.get(subject) ?? new Map<string, number>();
@@ -33,22 +38,25 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const isYou = subject === me.id;
   const name = isYou ? 'You' : who(subject);
   const own = isYou ? 'Your' : `${who(subject)}’s`;
-  // Exact pair debts. The home-currency figure comes from the same calculation as the headline, so the two always agree;
-  // the per-currency pieces sit underneath (negative = owed back the other way). Without a rate for some currency, pieces only.
+  // Exact: who owes whom from what was actually paid. Simplified: the fewest payments that settle the same positions.
+  // The home-currency figure comes from the same calculation as the headline, so the two always agree; the per-currency
+  // pieces sit underneath (in exact mode a negative piece is owed back the other way). Without a rate for some currency, pieces only.
   const mine = (d: { from: Id; to: Id }) => focus == null || d.from === focus || d.to === focus;
   const rows: { from: Id; to: Id; home: number | null; parts: Map<string, number> }[] = [];
   const addPart = (parts: Map<string, number>, cur: string, v: number) => parts.set(cur, (parts.get(cur) ?? 0) + v);
   if (exact) {
-    for (const d of pairwiseDebts(h).filter(mine)) {
+    const main = simplify ? settlementPlan(h.net) : pairwiseDebts(h);
+    const pieces = simplify ? settlementPlan(b.net) : pairwiseDebts(b);
+    for (const d of main.filter(mine)) {
       const parts = new Map<string, number>();
-      for (const x of pairwiseDebts(b)) {
+      for (const x of pieces) {
         if (x.from === d.from && x.to === d.to) addPart(parts, x.currency, x.amount);
-        else if (x.from === d.to && x.to === d.from) addPart(parts, x.currency, -x.amount);
+        else if (!simplify && x.from === d.to && x.to === d.from) addPart(parts, x.currency, -x.amount);
       }
       rows.push({ from: d.from, to: d.to, home: d.amount, parts });
     }
   } else {
-    for (const x of pairwiseDebts(b).filter(mine)) {
+    for (const x of (simplify ? settlementPlan(b.net) : pairwiseDebts(b)).filter(mine)) {
       let row = rows.find((r) => r.from === x.from && r.to === x.to);
       if (!row) rows.push((row = { from: x.from, to: x.to, home: null, parts: new Map() }));
       addPart(row.parts, x.currency, x.amount);
@@ -68,7 +76,13 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
         </div>
       )}
       <section>
-        <h2>Settle up</h2>
+        <div className="row between">
+          <h2>Settle up</h2>
+          <div className="seg" data-testid="settle-mode">
+            <button className={!simplify ? 'on' : ''} onClick={() => setSimplify(false)}>Exact</button>
+            <button className={simplify ? 'on' : ''} onClick={() => setSimplify(true)}>Simplified</button>
+          </div>
+        </div>
         <div className="panel" data-testid="simple-settle">
           {rows.length === 0 && <div className="simple-row muted">Nobody owes anyone anything.</div>}
           {rows.map((p) => (
@@ -80,6 +94,7 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
               </span>
             </div>
           ))}
+          {rows.length > 0 && <div className="panel-foot">{simplify ? 'Fewest payments that settle everyone; who paid for what is unchanged.' : 'Who owes whom, from what each person actually paid.'}</div>}
         </div>
       </section>
       <section>
