@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { computeBalances, computeHomeBalances, formatAmount, forwardDebts, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
-import { useLedger } from '../store.tsx';
+import { featureOn, useLedger } from '../store.tsx';
 import { ExportButton, TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
@@ -17,7 +17,8 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<Tx | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
-  const [simplify, setSimplifyState] = useState(readSettleMode);
+  const [simplifyPref, setSimplifyState] = useState(readSettleMode);
+  const simplify = simplifyPref && featureOn(state, 'simplified'); // the owner can switch the option off for everyone
   const setSimplify = (v: boolean) => { setSimplifyState(v); try { localStorage.setItem('settle-mode', v ? 'simple' : 'exact'); } catch { /* private mode */ } };
   // A person share link, or the admin opening someone from People: the page speaks about that person and shows only their entries.
   const focus = focusProp ?? (readOnly && state.shared_person_id != null ? me.id : null);
@@ -77,10 +78,12 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
       <section>
         <div className="settle-head">
           <h2>Settle up</h2>
-          <div className="seg" data-testid="settle-mode">
-            <button className={!simplify ? 'on' : ''} onClick={() => setSimplify(false)}>Exact</button>
-            <button className={simplify ? 'on' : ''} onClick={() => setSimplify(true)}>Simplified</button>
-          </div>
+          {featureOn(state, 'simplified') && (
+            <div className="seg" data-testid="settle-mode">
+              <button className={!simplify ? 'on' : ''} onClick={() => setSimplify(false)}>Exact</button>
+              <button className={simplify ? 'on' : ''} onClick={() => setSimplify(true)}>Simplified</button>
+            </div>
+          )}
         </div>
         <div className="panel" data-testid="simple-settle">
           {rows.length === 0 && <div className="simple-row muted">Nobody owes anyone anything.</div>}

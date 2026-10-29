@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'rea
 import { ChevronRight, Copy, Download, Eye, File, FileText, FolderPlus, Image, KeyRound, Link2, Lock, Pencil, Plus, Trash2, Upload } from 'lucide-react';
 import type { DocFolder, DocItem, DocsState, Id, Vault } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { copyText, useLedger } from '../store.tsx';
+import { copyText, featureOn, useLedger } from '../store.tsx';
 import { DangerButton, Empty, ErrorBox, Field, Modal, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
 import { decryptBytes, deriveMasterKey, encryptBytes, exportKey, fmtBytes, importKey, loadMaster, makeCheck, newFolderKey, newSalt, passesCheck, rememberMaster, unwrapKey, wrapKey } from '../vault.ts';
 
@@ -297,7 +297,7 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
             <input ref={fileInput} type="file" multiple style={{ display: 'none' }} onChange={(e) => { void upload([...(e.target.files ?? [])]); e.target.value = ''; }} data-testid="doc-file" />
             <button className="primary" disabled={busy} onClick={() => fileInput.current?.click()} data-testid="doc-upload"><Upload />Upload</button>
             <button disabled={busy} onClick={() => setNaming({ kind: 'folder', value: '' })}><FolderPlus />New folder</button>
-            {current.parent_id == null && current.trip_id != null && <button disabled={busy} onClick={() => setShare(true)} data-testid="doc-share"><Link2 />{d.shares.some((s) => s.folder_id === current.id) ? 'Shared' : 'Share'}</button>}
+            {current.parent_id == null && current.trip_id != null && featureOn(state, 'shares') && <button disabled={busy} onClick={() => setShare(true)} data-testid="doc-share"><Link2 />{d.shares.some((s) => s.folder_id === current.id) ? 'Shared' : 'Share'}</button>}
             {current.parent_id != null && <button className="ghost small" onClick={() => setNaming({ kind: 'folder', id: current.id, value: current.name })}><Pencil />Rename</button>}
             {canDeleteFolder && <DangerButton confirm={`Delete the empty folder "${tripName(current)}"?`} onConfirm={async () => { await api('DELETE', `/api/docs/folders/${current.id}`); window.location.hash = current.parent_id != null ? `#/docs/${current.parent_id}` : '#/docs'; await reload(); }}>Delete folder</DangerButton>}
           </div>

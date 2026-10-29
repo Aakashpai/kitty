@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ArrowRightLeft, ChartColumn, FileInput, FolderLock, LayoutGrid, LogOut, Moon, Menu, Plane, Plus, Scale, Smartphone, Sun, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { parseReceipt, type Trip, type TxInput, type Tx } from '../engine/index.ts';
 import { dropQueued, flushQueue, queued } from './api.ts';
-import { LedgerProvider, guessCategory, useLedger } from './store.tsx';
+import { LedgerProvider, featureOn, guessCategory, useLedger } from './store.tsx';
 import { navigate, useRoute } from './router.tsx';
 import { TxForm } from './components/TxForm.tsx';
 import { QuickAdd, liveTrip, localToday } from './components/QuickAdd.tsx';
@@ -71,6 +71,7 @@ function Shell() {
   const { state, user, logout, owner, me } = useLedger();
   const [quick, setQuick] = useState<Trip | null>(null);
   const [theme, toggleTheme] = useTheme();
+  const on = (k: Parameters<typeof featureOn>[1]) => featureOn(state, k);
   const [form, setForm] = useState<{ initial?: Partial<TxInput>; existing?: Tx; onSaved?: (tx: Tx) => void } | null>(null);
   const [formKey, setFormKey] = useState(0); // a fresh form each time, even when one form opens another ("Again" chips)
   const [account, setAccount] = useState(false);
@@ -142,14 +143,14 @@ function Shell() {
       case 'balances': return <Balances />;
       case 'imports': return <Imports />;
       case 'reports': return <Reports />;
-      case 'docs': return <Docs folderId={id} />;
+      case 'docs': return on('documents') ? <Docs folderId={id} /> : <Overview />;
       default: return <Overview />;
     }
   })();
   const trips = state.trips.filter((t) => !t.archived);
   return (
     <TxFormCtx.Provider value={open}>
-      {simple ? (
+      {simple && on('simple_view') ? (
         <div className="simple-app">
           <header className="shared-head">
             <a className="brand" href="#/" style={{ padding: 0 }}><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></a>
@@ -169,7 +170,7 @@ function Shell() {
           <button className="ghost icon hamburger" onClick={() => setMenu((o) => !o)} aria-label={menu ? 'Close menu' : 'Open menu'} aria-expanded={menu} data-testid="hamburger">{menu ? <X /> : <Menu />}</button>
           <div className={`side-body${menu ? ' open' : ''}`}>
           <nav className="nav" aria-label="Sections">
-            {NAV.map(([p, label, I]) => (
+            {NAV.filter(([p]) => p !== 'docs' || on('documents')).map(([p, label, I]) => (
               <a key={p} href={`#/${p}`} className={section === p ? 'active' : ''} title={label} aria-label={label}><I /><span className="label">{label}</span></a>
             ))}
           </nav>
@@ -185,7 +186,7 @@ function Shell() {
           <div className="sidebar-foot">
             <button className="primary add-side" onClick={addFast} data-testid="add-transaction"><Plus />Add transaction</button>
             <span className="shortcut">Press <kbd className="kbd">N</kbd> to add</span>
-            <button className="ghost theme-toggle" onClick={toggleSimple} title="Simple view" data-testid="simple-toggle"><Smartphone /><span className="label">Simple view</span></button>
+            {on('simple_view') && <button className="ghost theme-toggle" onClick={toggleSimple} title="Simple view" data-testid="simple-toggle"><Smartphone /><span className="label">Simple view</span></button>}
             <button className="ghost theme-toggle" onClick={toggleTheme} aria-label="Toggle theme" data-testid="theme-toggle">
               {theme === 'dark' ? <Sun /> : <Moon />}<span className="label">{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
             </button>

@@ -6,7 +6,7 @@ import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
 import { CHUNK, MAX_DOC, isStorageKey, objectStoreFromEnv } from './storage.ts';
-import type { DocItem, Id, PlanItem, PlanMeta } from '../engine/index.ts';
+import { FEATURES, type DocItem, type Id, type PlanItem, type PlanMeta } from '../engine/index.ts';
 import { announce, publicKey } from './push.ts';
 
 interface Ctx {
@@ -242,6 +242,12 @@ export async function createApp(opts: AppOptions) {
   route('PUT', '/api/settings', 'owner', async (c) => {
     if (c.body.home_currency !== undefined) await db.setSetting('home_currency', currency(c.body.home_currency));
     if (c.body.rates !== undefined) await db.setSetting('rates', JSON.stringify(rates(c.body.rates) ?? {}));
+    if (c.body.flags !== undefined) {
+      const raw = (c.body.flags && typeof c.body.flags === 'object' ? c.body.flags : {}) as Record<string, unknown>;
+      const known = new Set<string>(FEATURES.map((f) => f.key));
+      for (const [k, v] of Object.entries(raw)) if (!known.has(k) || typeof v !== 'boolean') throw new HttpError(400, `Unknown feature flag ${k}`);
+      await db.setSetting('flags', JSON.stringify(raw));
+    }
     if (c.body.shortcut_link !== undefined) {
       const link = optStr(c.body.shortcut_link);
       if (link && !/^https:\/\/www\.icloud\.com\/shortcuts\/[A-Za-z0-9]+$/.test(link)) throw new HttpError(400, 'Paste the iCloud link from Shortcuts (https://www.icloud.com/shortcuts/…)');

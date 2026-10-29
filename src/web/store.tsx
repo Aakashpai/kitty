@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type RateCtx, type Trip, type Tx, type UserPublic } from '../engine/index.ts';
+import { computeBalances, type Account, type Balances, type Id, type LedgerState, type Person, type RateCtx, type Trip, type Tx, type UserPublic , type FeatureKey } from '../engine/index.ts';
 import { ApiError, api, errorText, flushQueue, queued } from './api.ts';
 import { Login, Setup } from './pages/Auth.tsx';
 
@@ -219,6 +219,9 @@ export function useLedger(): Ledger {
   if (!v) throw new Error('useLedger outside LedgerProvider');
   return v;
 }
+
+/** A feature is on unless the owner switched it off. */
+export const featureOn = (state: Pick<LedgerState, 'settings'>, key: FeatureKey) => state.settings.flags?.[key] !== false;
 
 export const today = () => new Date().toISOString().slice(0, 10);
 export const COMMON_CURRENCIES = ['INR', 'SGD', 'USD', 'EUR', 'GBP', 'AED', 'THB', 'MYR', 'IDR', 'JPY', 'AUD', 'LKR', 'VND', 'CHF', 'HKD', 'KRW', 'NPR', 'CAD'];

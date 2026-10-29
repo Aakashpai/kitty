@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronLeft, Copy, Link2, MoreHorizontal, Plus, UserPlus } from 'lucide-react';
 import { computeHomeBalances, formatAmount, pairwiseDebts, type Invite, type Person, type Share } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { copyText, useLedger } from '../store.tsx';
+import { copyText, featureOn, useLedger } from '../store.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
 import { ShareModal } from './Trips.tsx';
 import { SimpleView } from './Simple.tsx';
@@ -125,7 +125,7 @@ export function People() {
                     <summary aria-label={`More actions for ${p.name}`}><MoreHorizontal /></summary>
                     <div className="menu-list" onClick={(e) => { (e.currentTarget.closest('details') as HTMLDetailsElement).open = false; }}>
                       <button className="small ghost" onClick={() => setEditing({ id: p.id, name: p.name, upi: p.upi_id ?? '' })}>Rename / UPI ID</button>
-                      {isOwner && !p.is_me && <button className="small ghost" onClick={() => setSharing(p)} data-testid={`share-person-${p.id}`}>Share their view</button>}
+                      {isOwner && featureOn(state, 'shares') && !p.is_me && <button className="small ghost" onClick={() => setSharing(p)} data-testid={`share-person-${p.id}`}>Share their view</button>}
                       {isOwner && !p.is_me && <button className="small ghost" disabled={busy} onClick={() => void update(p, { archived: p.archived ? 0 : 1 })}>{p.archived ? 'Unarchive' : 'Archive'}</button>}
                       {isOwner && !p.is_me && <DangerButton confirm={`Delete ${p.name}? Only possible if they have no transactions.`} onConfirm={() => run(() => api('DELETE', `/api/people/${p.id}`))}>Delete</DangerButton>}
                     </div>
@@ -204,7 +204,7 @@ export function People() {
 
 /** What one person sees on their share link, for the admin: only their entries, their share, where they stand. */
 export function PersonView({ id }: { id: number }) {
-  const { people, owner } = useLedger();
+  const { people, owner, state } = useLedger();
   const [scope, setScope] = useState('');
   const [share, setShare] = useState(false);
   const p = people.get(id);
@@ -217,7 +217,7 @@ export function PersonView({ id }: { id: number }) {
           <h1 className="row" style={{ gap: 10 }}><Avatar id={p.id} name={p.name} small />{p.name}</h1>
           <div className="sub">{p.is_me ? 'Your own entries and where you stand' : `What ${p.name} sees on their link: only their entries, their share, and what they owe or are owed`}</div>
         </div>
-        {owner && !p.is_me && <button onClick={() => setShare(true)} data-testid="share-person-page"><Link2 />Share their view</button>}
+        {owner && featureOn(state, 'shares') && !p.is_me && <button onClick={() => setShare(true)} data-testid="share-person-page"><Link2 />Share their view</button>}
       </div>
       <div className="simple-wrap"><SimpleView scope={scope} onScope={setScope} focus={p.id} /></div>
       {share && <ShareModal person={p} onClose={() => setShare(false)} />}

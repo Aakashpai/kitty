@@ -296,6 +296,16 @@ const parsePlan = (p: PlanItem): PlanItem => {
 };
 const PLAN_LABEL: Record<PlanItem['kind'], string> = { day: 'Itinerary', task: 'To-do', pack: 'Packing', stay: 'Stay option', link: 'Link', note: 'Note' };
 
+const parseFlags = (v: unknown): Record<string, boolean> => {
+  if (typeof v !== 'string' || !v) return {};
+  try {
+    const o = JSON.parse(v) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(o).filter(([, b]) => typeof b === 'boolean')) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+};
+
 const parseRates = (v: unknown): Record<string, number> | null => {
   if (typeof v !== 'string' || !v) return null;
   try {
@@ -491,7 +501,7 @@ export async function openDb(url: string, authToken?: string) {
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const state: LedgerState = {
-        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {}, shortcut_link: setting('shortcut_link') ?? null },
+        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {}, shortcut_link: setting('shortcut_link') ?? null, flags: parseFlags(setting('flags')) },
         people: rows<Person>(5),
         accounts: rows<Account>(6),
         trips,
@@ -567,7 +577,7 @@ export async function openDb(url: string, authToken?: string) {
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       return {
-        settings: { home_currency: setting('home_currency') ?? trips[0]?.currency ?? 'USD', rates: parseRates(setting('rates')) ?? {} },
+        settings: { home_currency: setting('home_currency') ?? trips[0]?.currency ?? 'USD', rates: parseRates(setting('rates')) ?? {}, flags: parseFlags(setting('flags')) },
         people,
         accounts,
         trips,

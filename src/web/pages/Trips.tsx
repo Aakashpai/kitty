@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Banknote, ChevronLeft, Copy, Link2, Lock, LockOpen, Pencil, Plus, Smartphone, Trash2 } from 'lucide-react';
 import { computeBalances, formatAmount, homeSpendingBy, parseAmount, shareOf, spendingBy, toMajor, type Id, type Person, type Share, type Trip, type TripBudget, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
-import { CATEGORIES, COMMON_CURRENCIES, copyText, useLedger } from '../store.tsx';
+import { CATEGORIES, COMMON_CURRENCIES, copyText, featureOn, useLedger } from '../store.tsx';
 import { navigate } from '../router.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
 import { ExportButton, TxList } from '../components/TxList.tsx';
@@ -246,7 +246,7 @@ function TripDays({ trip, txs, onOpen }: { trip: Trip; txs: Tx[]; onOpen: (tx: T
 export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareToken?: string; onRefresh?: () => Promise<void> }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
   // A trip that has no entries yet is being planned: open on the board.
-  const [tab, setTab] = useState<'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (state.transactions.some((t) => t.trip_id === trip.id) ? 'transactions' : 'plan'));
+  const [tab, setTab] = useState<'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (state.transactions.some((t) => t.trip_id === trip.id) || !featureOn(state, 'plan') ? 'transactions' : 'plan'));
   const [selected, setSelected] = useState<number | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
@@ -284,9 +284,9 @@ export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareTok
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
-        {(['plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
+        {(['plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).filter((t) => t !== 'plan' || featureOn(state, 'plan')).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
-      {tab === 'plan' && <TripPlan trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
+      {tab === 'plan' && featureOn(state, 'plan') && <TripPlan trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
       {tab === 'transactions' && (
         <div className="stack tight">
           <div className="row end"><ExportButton txs={txs} title={trip.name} /></div>
@@ -359,7 +359,7 @@ function TripDetail({ trip }: { trip: Trip }) {
         </div>
         <div className="row">
           <button onClick={() => setApplePay(true)} data-testid="apple-pay"><Smartphone />iPhone shortcuts</button>
-          <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>
+          {featureOn(state, 'shares') && <button onClick={() => setShare(true)} data-testid="share-trip"><Link2 />{linkCount ? `Shared (${linkCount})` : 'Share'}</button>}
           {owner && <button onClick={() => setEdit(true)} data-testid="edit-trip"><Pencil />Edit</button>}
           {owner && !trip.closed && <button disabled={busy} onClick={() => setClosed(1)} data-testid="close-trip"><Lock />Close trip</button>}
           {!trip.closed && <button onClick={() => openForm({ initial: { type: 'withdrawal', trip_id: trip.id } })}><Banknote />Cash withdrawal</button>}

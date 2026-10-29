@@ -375,6 +375,17 @@ test('trip plan: members edit, stays take votes, a trip link can vote and tick b
   assert.ok(!(await owner.state()).votes!.some((v) => v.item_id === villaA.id), 'votes go with the item');
 });
 
+test('feature flags: known keys and booleans only, carried in settings and on share links', async () => {
+  assert.equal((await owner.call('PUT', '/api/settings', { flags: { nope: true } })).status, 400);
+  assert.equal((await owner.call('PUT', '/api/settings', { flags: { plan: 'yes' } })).status, 400);
+  await owner.ok('PUT', '/api/settings', { flags: { simplified: false, plan: true } });
+  assert.deepEqual((await owner.state()).settings.flags, { simplified: false, plan: true });
+  const trip = (await owner.state()).trips[0]!;
+  const share = (await owner.ok('POST', '/api/shares', { trip_id: trip.id })) as unknown as { token: string };
+  assert.deepEqual(((await anon.ok('GET', `/api/shared/${share.token}`)) as unknown as LedgerState).settings.flags, { simplified: false, plan: true }, 'links see the same switches');
+  await owner.ok('PUT', '/api/settings', { flags: {} });
+});
+
 test('login lockout after repeated failures (runs last: it locks this IP)', async () => {
   const j = jar();
   for (let i = 0; i < 10; i++) assert.equal((await j.call('POST', '/api/auth/login', { email: 'me@example.com', password: 'nope' })).status, 401);

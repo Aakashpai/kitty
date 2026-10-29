@@ -3,7 +3,8 @@ import { Bell, BellOff } from 'lucide-react';
 import { ApiError, api, errorText } from '../api.ts';
 import type { DocsState } from '../../engine/index.ts';
 import { deriveMasterKey, makeCheck, newSalt, passesCheck, rememberMaster, unwrapKey, wrapKey } from '../vault.ts';
-import { useLedger } from '../store.tsx';
+import { featureOn, useLedger } from '../store.tsx';
+import { FEATURES, type FeatureKey } from '../../engine/index.ts';
 import { ErrorBox, Field, Modal } from './ui.tsx';
 
 const b64urlBytes = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
@@ -66,7 +67,15 @@ function Notifications() {
 }
 
 export function AccountModal({ onClose }: { onClose: () => void }) {
-  const { user } = useLedger();
+  const { user, state, reload } = useLedger();
+  const [flagErr, setFlagErr] = useState<string | null>(null);
+  const setFlag = async (key: FeatureKey, on: boolean) => {
+    try {
+      await api('PUT', '/api/settings', { flags: { ...(state.settings.flags ?? {}), [key]: on } });
+      await reload();
+      setFlagErr(null);
+    } catch (x) { setFlagErr(errorText(x)); }
+  };
   const [f, setF] = useState({ current: '', next: '', confirm: '' });
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -119,6 +128,21 @@ export function AccountModal({ onClose }: { onClose: () => void }) {
           <div style={{ display: 'contents' }}><dt>Role</dt><dd>{user?.role === 'owner' ? 'owner · admin' : 'member'}</dd></div>
         </dl>
         <Notifications />
+        {user?.role === 'owner' && (
+          <section className="stack tight" data-testid="features">
+            <h3>Features</h3>
+            <p className="muted small" style={{ margin: 0 }}>Switch parts of the app off for everyone, share links included. Nothing is deleted; turn a feature back on and it is all still there.</p>
+            <div className="panel">
+              {FEATURES.map((f) => (
+                <label className="plan-row check" key={f.key}>
+                  <input type="checkbox" checked={featureOn(state, f.key)} onChange={(e) => void setFlag(f.key, e.target.checked)} data-testid={`flag-${f.key}`} />
+                  <span><strong>{f.label}</strong><span className="muted small" style={{ display: 'block' }}>{f.hint}</span></span>
+                </label>
+              ))}
+            </div>
+            <ErrorBox error={flagErr} />
+          </section>
+        )}
         <form className="stack" onSubmit={(e) => void submit(e)} data-testid="password-form">
           <h3>Change password</h3>
           <Field label="Current password"><input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} data-testid="pw-current" /></Field>
