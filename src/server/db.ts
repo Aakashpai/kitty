@@ -242,6 +242,14 @@ const MIGRATIONS: string[] = [
     revoked INTEGER NOT NULL DEFAULT 0
   );
   `,
+  `
+  CREATE TABLE doc_chunks (
+    storage_key TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    PRIMARY KEY (storage_key, n)
+  );
+  `,
 ];
 
 const parseBudget = (v: unknown): TripBudget | null => {
@@ -856,6 +864,7 @@ export async function openDb(url: string, authToken?: string) {
       const marks = ids.map(() => '?').join(', ');
       const keys = (await t.all<{ storage_key: string }>(`SELECT storage_key FROM documents WHERE folder_id IN (${marks})`, ids)).map((r) => r.storage_key);
       await t.run(`DELETE FROM documents WHERE folder_id IN (${marks})`, ids);
+      if (keys.length) await t.run(`DELETE FROM doc_chunks WHERE storage_key IN (${keys.map(() => '?').join(', ')})`, keys);
       await t.run(`DELETE FROM doc_shares WHERE folder_id IN (${marks})`, ids);
       await t.run(`DELETE FROM doc_folders WHERE id IN (${marks})`, ids);
       await logIn(t, 'delete', 'folder', id, `Deleted a document folder (${keys.length} file${keys.length === 1 ? '' : 's'})`);
@@ -879,6 +888,7 @@ export async function openDb(url: string, authToken?: string) {
       const d = await t.get<DocItem>('SELECT * FROM documents WHERE id = ?', [id]);
       if (!d) throw new HttpError(404, 'Document not found');
       await t.run('DELETE FROM documents WHERE id = ?', [id]);
+      await t.run('DELETE FROM doc_chunks WHERE storage_key = ?', [d.storage_key]);
       await logIn(t, 'delete', 'document', id, `Deleted document ${d.name}`);
       return d.storage_key;
     }),
@@ -907,6 +917,13 @@ export async function openDb(url: string, authToken?: string) {
         documents: await t.all<Omit<DocItem, 'storage_key'>>(`SELECT id, folder_id, name, mime, size, iv, created_at FROM documents WHERE folder_id IN (${marks}) ORDER BY created_at DESC, id DESC`, ids),
       };
     }),
+    // Ciphertext in the database, in pieces small enough for one request each. Stays out of the JSON backup.
+    putChunk: (key: string, n: number, data: Uint8Array) => inTx((t) => t.run('INSERT OR REPLACE INTO doc_chunks (storage_key, n, data) VALUES (?, ?, ?)', [key, n, data])),
+    getChunk: (key: string, n: number) => read(async (t) => {
+      const row = await t.get<{ data: ArrayBuffer | Uint8Array }>('SELECT data FROM doc_chunks WHERE storage_key = ? AND n = ?', [key, n]);
+      return row ? Buffer.from(row.data as ArrayBuffer) : null;
+    }),
+    chunkCount: (key: string) => read(async (t) => (await t.get<{ n: number }>('SELECT COUNT(*) AS n FROM doc_chunks WHERE storage_key = ?', [key]))!.n),
     /** True when `folderId` sits inside the tree rooted at `rootId`. */
     folderWithin: (folderId: Id, rootId: Id) => read(async (t) => (await folderTree(t, rootId)).includes(folderId)),
 

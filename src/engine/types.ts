@@ -254,5 +254,5 @@ export interface DocItem {
   created_at: string;
 }
 export interface DocShare { id: Id; token: string; folder_id: Id; label: string | null; created_at: string; revoked: 0 | 1 }
-export interface DocsState { storage: 'r2' | 'local' | null; vault: Vault | null; folders: DocFolder[]; documents: DocItem[]; shares: DocShare[] }
+export interface DocsState { storage: 'r2' | 'db'; vault: Vault | null; folders: DocFolder[]; documents: DocItem[]; shares: DocShare[] }
 export interface SharedDocs { folder: Pick<DocFolder, 'id' | 'name' | 'trip_id'>; folders: Pick<DocFolder, 'id' | 'name' | 'parent_id'>[]; documents: Omit<DocItem, 'storage_key'>[] }

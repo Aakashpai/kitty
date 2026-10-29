@@ -5,7 +5,8 @@ import { ACCOUNT_TYPES, allocate, formatAmount, guessCategory, normalizeTx, pars
 import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
-import { isStorageKey, localStorage_, storageFromEnv } from './storage.ts';
+import { CHUNK, MAX_DOC, isStorageKey, objectStoreFromEnv } from './storage.ts';
+import type { DocItem } from '../engine/index.ts';
 import { announce, publicKey } from './push.ts';
 
 interface Ctx {
@@ -440,20 +441,32 @@ export async function createApp(opts: AppOptions) {
     return { file };
   });
 
-  // --- documents: encrypted in the browser; the API keeps wrapped keys and hands out short-lived storage URLs --
-  const storage = storageFromEnv(secret);
-  const needStorage = () => {
-    if (!storage) throw new HttpError(503, 'Document storage is not set up. Add R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET to the environment.');
-    return storage;
-  };
+  // --- documents: encrypted in the browser; the API keeps wrapped keys and serves ciphertext in chunks ---------
+  const store = objectStoreFromEnv(); // R2 when its variables are set; otherwise the blobs live in the database
   const b64 = (v: unknown, label: string) => {
     const s = String(v ?? '');
     if (!/^[A-Za-z0-9_-]{8,4096}$/.test(s)) throw new HttpError(400, `${label} is not valid`);
     return s;
   };
   const optId = (v: unknown, label: string) => (v == null || v === '' ? null : int(v, label));
-  const MAX_DOC = 200 * 1024 * 1024;
-  route('GET', '/api/docs', 'owner', async () => ({ storage: storage?.kind ?? null, ...(await db.docsState()) }));
+  const storageKey = (v: unknown) => {
+    const s = String(v ?? '');
+    if (!isStorageKey(s)) throw new HttpError(400, 'Storage key is not valid');
+    return s;
+  };
+  const chunkIndex = (c: Ctx) => {
+    const n = Number(c.url.searchParams.get('n'));
+    if (!Number.isInteger(n) || n < 0 || n > MAX_DOC / CHUNK) throw new HttpError(400, 'Bad chunk number');
+    return n;
+  };
+  const chunkReply = async (key: string, c: Ctx) => {
+    const data = await db.getChunk(key, chunkIndex(c));
+    if (!data) throw new HttpError(404, 'Not found');
+    return new Raw('application/octet-stream', data);
+  };
+  /** How the browser fetches a document's ciphertext: one signed URL (R2) or a chunk URL plus how many chunks. */
+  const location = async (doc: DocItem, chunkUrl: string) => (store ? { url: await store.downloadUrl(doc.storage_key) } : { url: chunkUrl, chunks: await db.chunkCount(doc.storage_key) });
+  route('GET', '/api/docs', 'owner', async () => ({ storage: store?.kind ?? 'db', ...(await db.docsState()) }));
   route('POST', '/api/docs/vault', 'owner', async (c) => (await db.createVault({ salt: b64(c.body.salt, 'Salt'), check_iv: b64(c.body.check_iv, 'Check'), check_ct: b64(c.body.check_ct, 'Check') }), { ok: true }));
   route('PUT', '/api/docs/vault', 'owner', async (c) => {
     const folders = (Array.isArray(c.body.folders) ? c.body.folders : []).map((f) => {
@@ -467,56 +480,57 @@ export async function createApp(opts: AppOptions) {
   route('PUT', '/api/docs/folders/:id', 'owner', async (c) => (await db.renameFolder(Number(c.params.id), str(c.body.name, 'Name')), { ok: true }));
   route('DELETE', '/api/docs/folders/:id', 'owner', async (c) => {
     const keys = await db.deleteFolder(Number(c.params.id));
-    if (storage) await Promise.allSettled(keys.map((k) => storage.remove(k)));
+    if (store) await Promise.allSettled(keys.map((k) => store.remove(k)));
     return { ok: true };
   });
+  // Upload: the browser encrypts, then either PUTs to a signed bucket URL or PUTs the ciphertext here one chunk at a time.
+  // ponytail: chunks of an upload that never gets registered stay behind; sweep them if the database ever grows for no reason.
   route('POST', '/api/docs/upload', 'owner', async (c) => {
-    const s = needStorage();
     const folder = await db.getFolder(int(c.body.folder_id, 'Folder'));
     const size = int(c.body.size, 'Size');
     if (size <= 0 || size > MAX_DOC) throw new HttpError(400, 'Files can be up to 200 MB');
     const storage_key = `d${folder.id}_${randomToken(18)}`;
-    return { storage_key, ...(await s.uploadUrl(storage_key)) };
+    return store ? { storage_key, url: await store.uploadUrl(storage_key) } : { storage_key, url: `/api/docs/blob/${storage_key}`, chunk: CHUNK };
   });
+  route('PUT', '/api/docs/blob/:key', 'owner', async (c) => {
+    if (store) throw new HttpError(400, 'Uploads go straight to the bucket');
+    const key = storageKey(c.params.key);
+    const n = chunkIndex(c);
+    const data = await readRaw(c.req, CHUNK);
+    if (!data.length) throw new HttpError(400, 'Empty chunk');
+    await db.putChunk(key, n, data);
+    return { ok: true };
+  }, { raw: true });
+  route('GET', '/api/docs/blob/:key', 'owner', (c) => chunkReply(storageKey(c.params.key), c));
   route('POST', '/api/docs/shares', 'owner', async (c) => db.createDocShare({ token: randomToken(18), folder_id: int(c.body.folder_id, 'Folder'), label: optStr(c.body.label) }));
   route('DELETE', '/api/docs/shares/:id', 'owner', async (c) => (await db.revokeDocShare(Number(c.params.id)), { ok: true }));
-  const docShare = async (token: string) => {
-    const s = await db.docShareByToken(token);
-    if (!s) throw new HttpError(404, 'This link has been turned off or never existed.');
-    return s;
-  };
-  route('GET', '/api/docs/shared/:token', 'public', async (c) => db.sharedDocs((await docShare(c.params.token ?? '')).folder_id));
-  route('GET', '/api/docs/shared/:token/:id/url', 'public', async (c) => {
-    const share = await docShare(c.params.token ?? '');
+  const sharedDoc = async (c: Ctx) => {
+    const share = await db.docShareByToken(c.params.token ?? '');
+    if (!share) throw new HttpError(404, 'This link has been turned off or never existed.');
+    if (c.params.id == null) return { share, doc: null };
     const doc = await db.getDocument(Number(c.params.id));
     if (!(await db.folderWithin(doc.folder_id, share.folder_id))) throw new HttpError(404, 'Document not found');
-    return { url: await needStorage().downloadUrl(doc.storage_key) };
+    return { share, doc };
+  };
+  route('GET', '/api/docs/shared/:token', 'public', async (c) => db.sharedDocs((await sharedDoc(c)).share.folder_id));
+  route('GET', '/api/docs/shared/:token/:id/url', 'public', async (c) => {
+    const { share, doc } = await sharedDoc(c);
+    return location(doc!, `/api/docs/shared/${share.token}/${doc!.id}/blob`);
   });
-  if (storage?.kind === 'local') {
-    // Development only: the signed URL itself is the permission, like a presigned bucket URL would be.
-    const local = storage as ReturnType<typeof localStorage_>;
-    const check = (c: Ctx, method: string) => {
-      const key = c.params.key ?? '';
-      if (!local.verify(key, method, c.url.searchParams.get('exp') ?? '', c.url.searchParams.get('sig') ?? '')) throw new HttpError(403, 'This link is not valid any more');
-      return key;
-    };
-    route('PUT', '/api/docs/blob/:key', 'public', async (c) => (local.write(check(c, 'PUT'), await readRaw(c.req, MAX_DOC)), { ok: true }), { raw: true });
-    route('GET', '/api/docs/blob/:key', 'public', async (c) => {
-      const data = local.read(check(c, 'GET'));
-      if (!data) throw new HttpError(404, 'Not found');
-      return new Raw('application/octet-stream', data);
-    });
-  }
+  route('GET', '/api/docs/shared/:token/:id/blob', 'public', async (c) => chunkReply((await sharedDoc(c)).doc!.storage_key, c));
   route('POST', '/api/docs', 'owner', async (c) => {
-    const storage_key = String(c.body.storage_key ?? '');
-    if (!isStorageKey(storage_key) || !storage_key.startsWith('d')) throw new HttpError(400, 'Storage key is not valid');
+    const storage_key = storageKey(c.body.storage_key);
+    if (!store && !(await db.chunkCount(storage_key))) throw new HttpError(400, 'Nothing was uploaded for this file');
     return db.createDocument({ folder_id: int(c.body.folder_id, 'Folder'), name: str(c.body.name, 'Name', 200), mime: str(c.body.mime, 'Type', 100), size: int(c.body.size, 'Size'), storage_key, iv: b64(c.body.iv, 'IV') });
   });
-  route('GET', '/api/docs/:id/url', 'owner', async (c) => ({ url: await needStorage().downloadUrl((await db.getDocument(Number(c.params.id))).storage_key) }));
+  route('GET', '/api/docs/:id/url', 'owner', async (c) => {
+    const doc = await db.getDocument(Number(c.params.id));
+    return location(doc, `/api/docs/blob/${doc.storage_key}`);
+  });
   route('PUT', '/api/docs/:id', 'owner', async (c) => (await db.renameDocument(Number(c.params.id), str(c.body.name, 'Name', 200)), { ok: true }));
   route('DELETE', '/api/docs/:id', 'owner', async (c) => {
     const key = await db.deleteDocument(Number(c.params.id));
-    if (storage) await storage.remove(key).catch(() => undefined);
+    if (store) await store.remove(key).catch(() => undefined);
     return { ok: true };
   });
 
@@ -601,7 +615,7 @@ function parseBody(text: string): Record<string, unknown> {
   }
 }
 
-/** The whole request body as bytes (local document uploads only; production uploads go straight to the bucket). */
+/** The whole request body as bytes (one document chunk). */
 function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
   return new Promise((ok, reject) => {
     const chunks: Buffer[] = [];

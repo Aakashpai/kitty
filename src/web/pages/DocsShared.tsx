@@ -4,7 +4,7 @@ import type { DocItem, Id, SharedDocs } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { APP_NAME, Logo } from '../components/ui.tsx';
 import { importKey } from '../vault.ts';
-import { DocRows, Preview, canPreview, openDecrypted, pathTo, saveBlobUrl } from './Docs.tsx';
+import { DocRows, Preview, canPreview, openDecrypted, pathTo, saveBlobUrl, type BlobLocation } from './Docs.tsx';
 
 /** A shared document folder, opened from a link whose hash carries the folder key. Read-only; decryption happens here. */
 export function DocsShared({ token, keyB64 }: { token: string; keyB64: string }) {
@@ -22,8 +22,8 @@ export function DocsShared({ token, keyB64 }: { token: string; keyB64: string })
     if (!key) return;
     setBusy(true);
     try {
-      const { url } = await api<{ url: string }>('GET', `/api/docs/shared/${token}/${doc.id}/url`);
-      const obj = await openDecrypted(doc, key, url);
+      const loc = await api<BlobLocation>('GET', `/api/docs/shared/${token}/${doc.id}/url`);
+      const obj = await openDecrypted(doc, key, loc);
       if (canPreview(doc.mime)) setPreview({ doc, url: obj }); else saveBlobUrl(obj, doc.name);
       setErr(null);
     } catch (e) { setErr(errorText(e)); } finally { setBusy(false); }

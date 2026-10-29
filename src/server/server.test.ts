@@ -1,14 +1,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeBalances, pairwiseDebts, type LedgerState, type Tx } from '../engine/index.ts';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { createApp } from './app.ts';
 import { seed } from './seed.ts';
 
 const SECRET = 'test-secret';
-process.env.DOCS_DIR = mkdtempSync(join(tmpdir(), 'kitty-docs-')); // local document blobs for the tests
 const boot = async () => {
   const app = await createApp({ url: ':memory:', staticDir: null, secret: SECRET });
   await new Promise<void>((r) => app.server.listen(0, r));
@@ -28,12 +24,13 @@ const jar = (base = app.base) => {
     if (sc) cookie = sc.split(';')[0]!;
     return { status: res.status, json: (await res.json().catch(() => ({}))) as Json };
   };
+  const raw = (method: string, path: string, body?: BodyInit) => fetch(base + path, { method, headers: { cookie, 'content-type': 'application/octet-stream' }, body });
   const ok = async (method: string, path: string, body?: unknown) => {
     const r = await call(method, path, body);
     assert.equal(r.status, 200, `${method} ${path}: ${JSON.stringify(r.json)}`);
     return r.json;
   };
-  return { call, ok, state: async () => (await ok('GET', '/api/state')) as unknown as LedgerState };
+  return { call, ok, raw, state: async () => (await ok('GET', '/api/state')) as unknown as LedgerState };
 };
 const owner = jar();
 const anon = jar();
@@ -283,11 +280,11 @@ test('owner can be provisioned from configuration and can change their password'
   }
 });
 
-test('documents: vault, folders, encrypted blobs through signed URLs, share links, cleanup', async () => {
+test('documents: vault, folders, ciphertext in chunks, share links, cleanup', async () => {
   const b64 = (n: number) => Buffer.from(Array.from({ length: n }, (_, i) => i % 251)).toString('base64url');
   assert.equal((await anon.call('GET', '/api/docs')).status, 401);
-  const empty = (await owner.ok('GET', '/api/docs')) as unknown as { storage: string; vault: unknown; folders: unknown[] };
-  assert.equal(empty.storage, 'local');
+  const empty = (await owner.ok('GET', '/api/docs')) as unknown as { storage: string; vault: unknown };
+  assert.equal(empty.storage, 'db');
   assert.equal(empty.vault, null);
   await owner.ok('POST', '/api/docs/vault', { salt: b64(16), check_iv: b64(12), check_ct: b64(32) });
   assert.equal((await owner.call('POST', '/api/docs/vault', { salt: b64(16), check_iv: b64(12), check_ct: b64(32) })).status, 409, 'vault is created once');
@@ -295,17 +292,22 @@ test('documents: vault, folders, encrypted blobs through signed URLs, share link
   const personal = (await owner.ok('POST', '/api/docs/folders', { name: 'Personal', key_iv: b64(12), key_ct: b64(40) })) as unknown as { id: number };
   const sub = (await owner.ok('POST', '/api/docs/folders', { name: 'Visa', parent_id: personal.id })) as unknown as { id: number; key_ct: string | null };
   assert.equal(sub.key_ct, null, 'subfolders inherit the top-level key');
-  // upload: a signed PUT, then register the blob
+  // upload: the ciphertext goes up in chunks, then the document is registered
   assert.equal((await owner.call('POST', '/api/docs/upload', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 0 })).status, 400);
-  const slot = (await owner.ok('POST', '/api/docs/upload', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 5 })) as unknown as { storage_key: string; url: string; method: string };
-  assert.equal(slot.method, 'PUT');
-  const cipher = Buffer.from('hello');
-  assert.equal((await fetch(app.base + slot.url, { method: 'PUT', body: cipher })).status, 200);
-  assert.equal((await fetch(app.base + slot.url.replace(/sig=.*$/, 'sig=bad'), { method: 'PUT', body: cipher })).status, 403, 'the signature is the permission');
+  const slot = (await owner.ok('POST', '/api/docs/upload', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 5 })) as unknown as { storage_key: string; url: string; chunk: number };
+  assert.ok(slot.chunk > 0 && slot.url.endsWith(slot.storage_key));
+  assert.equal((await owner.call('POST', '/api/docs', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 5, storage_key: slot.storage_key, iv: b64(12) })).status, 400, 'nothing uploaded yet');
+  assert.equal((await owner.raw('PUT', `${slot.url}?n=0`, Buffer.from('hel'))).status, 200);
+  assert.equal((await owner.raw('PUT', `${slot.url}?n=1`, Buffer.from('lo'))).status, 200);
+  assert.equal((await anon.raw('PUT', `${slot.url}?n=2`, Buffer.from('x'))).status, 401, 'only the owner uploads');
+  assert.equal((await owner.raw('PUT', `/api/docs/blob/..?n=0`, Buffer.from('x'))).status, 404);
   const doc = (await owner.ok('POST', '/api/docs', { folder_id: sub.id, name: 'passport.pdf', mime: 'application/pdf', size: 5, storage_key: slot.storage_key, iv: b64(12) })) as unknown as { id: number };
-  assert.equal((await owner.call('POST', '/api/docs', { folder_id: sub.id, name: 'x', mime: 'text/plain', size: 1, storage_key: '../../etc/passwd', iv: b64(12) })).status, 400);
-  const got = (await owner.ok('GET', `/api/docs/${doc.id}/url`)) as unknown as { url: string };
-  assert.equal(Buffer.from(await (await fetch(app.base + got.url)).arrayBuffer()).toString(), 'hello', 'the blob comes back untouched');
+  assert.equal((await owner.call('POST', '/api/docs', { folder_id: sub.id, name: 'x', mime: 'text/plain', size: 1, storage_key: 'etc_passwd', iv: b64(12) })).status, 400);
+  const loc = (await owner.ok('GET', `/api/docs/${doc.id}/url`)) as unknown as { url: string; chunks: number };
+  assert.equal(loc.chunks, 2);
+  const back = Buffer.concat(await Promise.all([0, 1].map(async (n) => Buffer.from(await (await owner.raw('GET', `${loc.url}?n=${n}`)).arrayBuffer()))));
+  assert.equal(back.toString(), 'hello', 'the chunks come back untouched and in order');
+  assert.equal((await anon.raw('GET', `${loc.url}?n=0`)).status, 401, 'private unless shared');
   const listed = (await owner.ok('GET', '/api/docs')) as unknown as { folders: unknown[]; documents: { id: number }[] };
   assert.equal(listed.folders.length, 2);
   assert.deepEqual(listed.documents.map((d) => d.id), [doc.id]);
@@ -317,17 +319,18 @@ test('documents: vault, folders, encrypted blobs through signed URLs, share link
   assert.deepEqual(view.folders.map((f) => f.id), [sub.id]);
   assert.equal(view.documents.length, 1);
   assert.ok(!('storage_key' in view.documents[0]!), 'storage keys stay private');
-  const shared = (await anon.ok('GET', `/api/docs/shared/${share.token}/${doc.id}/url`)) as unknown as { url: string };
-  assert.equal((await fetch(app.base + shared.url)).status, 200);
+  const shared = (await anon.ok('GET', `/api/docs/shared/${share.token}/${doc.id}/url`)) as unknown as { url: string; chunks: number };
+  assert.equal(shared.chunks, 2);
+  assert.equal(Buffer.from(await (await anon.raw('GET', `${shared.url}?n=1`)).arrayBuffer()).toString(), 'lo');
   assert.equal((await anon.call('GET', `/api/docs/shared/${share.token}/999/url`)).status, 404);
   assert.equal((await anon.call('POST', '/api/docs/folders', { name: 'x' })).status, 401, 'a link never grants write access');
   await owner.ok('DELETE', `/api/docs/shares/${share.id}`);
   assert.equal((await anon.call('GET', `/api/docs/shared/${share.token}`)).status, 404, 'revoked');
   // password change re-wraps the top-level keys
   await owner.ok('PUT', '/api/docs/vault', { salt: b64(16), check_iv: b64(12), check_ct: b64(32), folders: [{ id: personal.id, key_iv: b64(12), key_ct: b64(48) }] });
-  // deleting the top-level folder removes the tree, the rows and the blob
+  // deleting the top-level folder removes the tree, the rows and the chunks
   await owner.ok('DELETE', `/api/docs/folders/${personal.id}`);
-  assert.equal((await fetch(app.base + got.url)).status, 404, 'blob gone');
+  assert.equal((await owner.raw('GET', `${loc.url}?n=0`)).status, 404, 'chunks gone');
   const after = (await owner.ok('GET', '/api/docs')) as unknown as { folders: unknown[]; documents: unknown[] };
   assert.deepEqual([after.folders.length, after.documents.length], [0, 0]);
 });

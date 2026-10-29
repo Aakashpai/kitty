@@ -21,11 +21,40 @@ export const pathTo = <F extends Pick<DocFolder, 'id' | 'parent_id'>>(folders: F
   return out;
 };
 
+export interface BlobSlot { storage_key: string; url: string; chunk?: number }
+export interface BlobLocation { url: string; chunks?: number }
+
+/** Sends ciphertext to storage: one PUT to a signed bucket URL, or one PUT per chunk to the API. */
+export async function putCipher(slot: BlobSlot, ct: ArrayBuffer): Promise<void> {
+  if (!slot.chunk) {
+    const r = await fetch(slot.url, { method: 'PUT', body: ct });
+    if (!r.ok) throw new Error(`Upload failed (${r.status}). If this is a new bucket, check its CORS rule.`);
+    return;
+  }
+  for (let n = 0, off = 0; off < ct.byteLength; n += 1, off += slot.chunk) {
+    const r = await fetch(`${slot.url}?n=${n}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: ct.slice(off, off + slot.chunk) });
+    if (!r.ok) throw new Error(`Upload failed on part ${n + 1} (${r.status})`);
+  }
+}
+/** Fetches ciphertext back: one signed URL, or every chunk in order. */
+export async function fetchCipher(loc: BlobLocation): Promise<ArrayBuffer> {
+  if (loc.chunks == null) {
+    const r = await fetch(loc.url);
+    if (!r.ok) throw new Error(`Could not fetch the file (${r.status})`);
+    return r.arrayBuffer();
+  }
+  if (!loc.chunks) throw new Error('This file has no data stored; upload it again');
+  const parts: ArrayBuffer[] = [];
+  for (let n = 0; n < loc.chunks; n += 1) {
+    const r = await fetch(`${loc.url}?n=${n}`);
+    if (!r.ok) throw new Error(`Could not fetch part ${n + 1} of the file (${r.status})`);
+    parts.push(await r.arrayBuffer());
+  }
+  return new Blob(parts).arrayBuffer();
+}
 /** Fetches the ciphertext, decrypts it here, and hands back an object URL the browser can show or save. */
-export async function openDecrypted(doc: Pick<DocItem, 'iv' | 'mime'>, key: CryptoKey, url: string): Promise<string> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`Could not fetch the file (${r.status})`);
-  const plain = await decryptBytes(key, doc.iv, await r.arrayBuffer()).catch(() => { throw new Error('This file could not be decrypted with the key you have'); });
+export async function openDecrypted(doc: Pick<DocItem, 'iv' | 'mime'>, key: CryptoKey, loc: BlobLocation): Promise<string> {
+  const plain = await decryptBytes(key, doc.iv, await fetchCipher(loc)).catch(() => { throw new Error('This file could not be decrypted with the key you have'); });
   return URL.createObjectURL(new Blob([plain], { type: doc.mime }));
 }
 export const saveBlobUrl = (url: string, name: string) => {
@@ -169,7 +198,6 @@ export function Docs({ folderId }: { folderId: number | null }) {
       <div className="page-head">
         <div><h1>Documents</h1><div className="sub">Passports, visas, tickets and boarding passes, encrypted on your device before they are stored</div></div>
       </div>
-      {!d.storage && <div className="warn-box">Document storage is not configured on the server yet, so uploads will not work. Set the R2 variables in Vercel.</div>}
       {!d.vault ? <VaultSetup email={user?.email ?? ''} onDone={(m) => { setMaster(m); void reload(); }} />
         : !master ? <Unlock vault={d.vault} onDone={setMaster} />
           : <Browser d={d} master={master} keys={keys.current} folderId={folderId} reload={reload} />}
@@ -220,9 +248,8 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
         setProgress(`Encrypting and uploading ${i} of ${files.length}: ${file.name}`);
         const mime = file.type || 'application/octet-stream';
         const { iv, ct } = await encryptBytes(key, await file.arrayBuffer());
-        const slot = await api<{ storage_key: string; url: string; method: 'PUT' }>('POST', '/api/docs/upload', { folder_id: current.id, name: file.name, mime, size: file.size });
-        const put = await fetch(slot.url, { method: slot.method, body: ct });
-        if (!put.ok) throw new Error(`Upload failed (${put.status}). If this is a new bucket, check its CORS rule.`);
+        const slot = await api<BlobSlot>('POST', '/api/docs/upload', { folder_id: current.id, name: file.name, mime, size: file.size });
+        await putCipher(slot, ct);
         await api('POST', '/api/docs', { folder_id: current.id, name: file.name, mime, size: file.size, storage_key: slot.storage_key, iv });
       }
     } finally { setProgress(null); }
@@ -230,8 +257,8 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
   });
   const open = (doc: DocItem) => act(async () => {
     const folder = folders.find((f) => f.id === doc.folder_id)!;
-    const { url } = await api<{ url: string }>('GET', `/api/docs/${doc.id}/url`);
-    const obj = await openDecrypted(doc, await keyFor(folder), url);
+    const loc = await api<BlobLocation>('GET', `/api/docs/${doc.id}/url`);
+    const obj = await openDecrypted(doc, await keyFor(folder), loc);
     if (canPreview(doc.mime)) setPreview({ doc, url: obj }); else saveBlobUrl(obj, doc.name);
   });
   const saveName = (e: FormEvent) => {
@@ -267,7 +294,7 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
           <div className="crumbs">{crumbs.map((f, i) => <span key={f.id}>{i > 0 && <ChevronRight />}<a href={`#/docs/${f.id}`}>{i === 0 ? tripName(f) : f.name}</a></span>)}</div>
           <div className="row">
             <input ref={fileInput} type="file" multiple style={{ display: 'none' }} onChange={(e) => { void upload([...(e.target.files ?? [])]); e.target.value = ''; }} data-testid="doc-file" />
-            <button className="primary" disabled={busy || !d.storage} onClick={() => fileInput.current?.click()} data-testid="doc-upload"><Upload />Upload</button>
+            <button className="primary" disabled={busy} onClick={() => fileInput.current?.click()} data-testid="doc-upload"><Upload />Upload</button>
             <button disabled={busy} onClick={() => setNaming({ kind: 'folder', value: '' })}><FolderPlus />New folder</button>
             {current.parent_id == null && current.trip_id != null && <button disabled={busy} onClick={() => setShare(true)} data-testid="doc-share"><Link2 />{d.shares.some((s) => s.folder_id === current.id) ? 'Shared' : 'Share'}</button>}
             {current.parent_id != null && <button className="ghost small" onClick={() => setNaming({ kind: 'folder', id: current.id, value: current.name })}><Pencil />Rename</button>}
@@ -285,7 +312,7 @@ function Browser({ d, master, keys, folderId, reload }: { d: DocsState; master: 
         {progress && <div className="info-box"><Spinner /> {progress}</div>}
         <ErrorBox error={err} />
         <DocRows docs={docs} onOpen={open} onRename={(doc) => setNaming({ kind: 'doc', id: doc.id, value: doc.name })} onDelete={async (doc) => { await api('DELETE', `/api/docs/${doc.id}`); await reload(); }} />
-        <div className={`dropzone${over ? ' over' : ''}`}>Drop files here, or use Upload. Each file is encrypted in this browser before it is stored.</div>
+        <div className={`dropzone${over ? ' over' : ''}`}>Drop files here, or use Upload. Each file is encrypted in this browser before it is stored{d.storage === 'db' ? ', in the ledger’s own database' : ''}.</div>
       </div>
       {preview && <Preview doc={preview.doc} url={preview.url} onClose={() => setPreview(null)} />}
       {share && <DocShareModal folder={root} name={tripName(root)} shares={d.shares.filter((s) => s.folder_id === root.id)} keyFor={() => keyFor(root)} reload={reload} onClose={() => setShare(false)} />}
