@@ -152,6 +152,7 @@ export interface LedgerCtx {
   accounts: Account[];
   trips: Trip[];
   transactions: Tx[];
+  settings?: Pick<Settings, 'square_under'>;
 }
 
 export interface Settings {
@@ -159,15 +160,17 @@ export interface Settings {
   rates: Record<string, number>; // e.g. { SGD: 75, MYR: 24.5 } = home-currency value of one unit
   shortcut_link?: string | null; // iCloud link to the Apple Pay shortcut, so friends can install it in one tap
   flags?: Partial<Record<FeatureKey, boolean>>; // owner's switches; a missing key means on
+  square_under?: number | null; // leftovers under this many units of the home currency are negligible (default 10)
 }
 
 /** Features the owner can switch off for everyone, including share links. */
-export type FeatureKey = 'simplified' | 'simple_view' | 'documents' | 'plan' | 'shares';
+export type FeatureKey = 'simplified' | 'simple_view' | 'documents' | 'plan' | 'shares' | 'square';
 export const FEATURES: { key: FeatureKey; label: string; hint: string }[] = [
   { key: 'simplified', label: 'Simplified settle-up', hint: 'The Exact / Simplified switch on the Simple view and on share links. Off shows exact pair debts only.' },
   { key: 'simple_view', label: 'Simple view', hint: 'The phone-first one-page view and its toggle in the menu.' },
   { key: 'documents', label: 'Documents', hint: 'The encrypted document vault in the sidebar.' },
   { key: 'plan', label: 'Trip plan', hint: 'The Plan tab on every trip: stays, votes, itinerary, checklists.' },
+  { key: 'square', label: 'Call it square', hint: 'A button on leftovers too small to chase (exchange rates, rounding) that clears them for good after asking. The amount below decides what counts as too small; such amounts are marked negligible either way.' },
   { key: 'shares', label: 'New share links', hint: 'The Share buttons on trips, people and document folders. Existing links keep working until turned off one by one.' },
 ];
 

@@ -497,6 +497,8 @@ details[open] summary::before { transform: rotate(90deg); }
 .simple-hero .muted { margin-top: 6px; }
 .simple-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 14px; }
 .simple-row:last-child { border-bottom: 0; }
+.simple-row:has(.simple-row-note) { flex-wrap: wrap; row-gap: 4px; }
+.simple-row-note { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-size: 12px; }
 .simple-row .pair { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .simple-row .amt { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .simple-row .amt .money-list { display: flex; flex-direction: column; align-items: flex-end; gap: 0; }
@@ -579,6 +581,7 @@ td .who { flex-wrap: wrap; white-space: normal; }
 .plan-row .title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .plan-row .grow { flex: 1; }
 .plan-row .check { font-size: 14px; color: var(--text); min-width: 0; }
+.plan-row.check > input[type=checkbox] { flex: none; }
 .plan-row .check span { overflow-wrap: anywhere; }
 .plan-row .done { text-decoration: line-through; color: var(--text-3); }
 .plan-row select { height: 28px; font-size: 12px; padding: 0 22px 0 8px; width: auto; max-width: 130px; flex: none; }

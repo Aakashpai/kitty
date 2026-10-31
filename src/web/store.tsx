@@ -172,7 +172,7 @@ export function LedgerProvider({ children, initialState, readOnly = false }: { c
       accounts,
       trips,
       balances: computeBalances(state.transactions, state.accounts),
-      rateCtx: { home: state.settings.home_currency, rates: state.settings.rates ?? {}, trips: state.trips, accounts: state.accounts },
+      rateCtx: { home: state.settings.home_currency, rates: state.settings.rates ?? {}, trips: state.trips, accounts: state.accounts, small: state.settings.square_under },
       who: (id) => (id == null ? '—' : id === me.id && !readOnly ? 'You' : (people.get(id)?.name ?? `#${id}`)),
       accountName: (id) => (id == null ? '—' : (accounts.get(id)?.name ?? `#${id}`)),
       logout: async () => {

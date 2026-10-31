@@ -96,6 +96,7 @@ export interface RateCtx {
   rates: Record<string, number>;
   trips: Trip[];
   accounts: Account[];
+  small?: number | null; // home-currency leftovers under this many units are negligible (default 10)
 }
 export interface Conversion {
   rate: number;

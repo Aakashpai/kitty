@@ -47,7 +47,7 @@ export function Overview() {
   const hb = computeHomeBalances(state.transactions, rateCtx);
   let owedHome = 0, oweHome = 0;
   for (const d of pairwiseDebts(hb)) {
-    if (negligible(d.amount, rateCtx.home)) continue; // exchange-rate leftovers; the Simple view and Balances show them as such
+    if (negligible(d.amount, rateCtx.home, rateCtx.small)) continue; // exchange-rate leftovers; the Simple view and Balances show them as such
     if (d.to === me.id) owedHome += d.amount;
     if (d.from === me.id) oweHome += d.amount;
   }

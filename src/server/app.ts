@@ -248,6 +248,11 @@ export async function createApp(opts: AppOptions) {
       for (const [k, v] of Object.entries(raw)) if (!known.has(k) || typeof v !== 'boolean') throw new HttpError(400, `Unknown feature flag ${k}`);
       await db.setSetting('flags', JSON.stringify(raw));
     }
+    if (c.body.square_under !== undefined) {
+      const n = Number(c.body.square_under);
+      if (!Number.isFinite(n) || n <= 0 || n > 10_000) throw new HttpError(400, 'Enter an amount above 0 and up to 10,000');
+      await db.setSetting('square_under', String(n));
+    }
     if (c.body.shortcut_link !== undefined) {
       const link = optStr(c.body.shortcut_link);
       if (link && !/^https:\/\/www\.icloud\.com\/shortcuts\/[A-Za-z0-9]+$/.test(link)) throw new HttpError(400, 'Paste the iCloud link from Shortcuts (https://www.icloud.com/shortcuts/…)');

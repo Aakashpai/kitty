@@ -164,7 +164,7 @@ export function validateTx(tx: TxInput, ctx: LedgerCtx): string[] {
       if (!/^[A-Z]{3}$/.test(sc)) errs.push('Settled currency must be a 3-letter code');
       if (sc === tx.currency) {
         // Equal, except a negligible leftover called square, which settles nothing (see squareUp)
-        if (tx.settled_amount != null && tx.settled_amount !== tx.amount && !(tx.settled_amount === 0 && negligible(tx.amount, tx.currency))) errs.push('Settled amount must equal the amount paid when the currency is the same');
+        if (tx.settled_amount != null && tx.settled_amount !== tx.amount && !(tx.settled_amount === 0 && negligible(tx.amount, tx.currency, ctx.settings?.square_under))) errs.push('Settled amount must equal the amount paid when the currency is the same');
       } else if (!isMinor(tx.settled_amount) || tx.settled_amount <= 0) {
         errs.push(`Enter how much ${sc} this payment settles`);
       }

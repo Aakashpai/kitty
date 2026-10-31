@@ -501,7 +501,7 @@ export async function openDb(url: string, authToken?: string) {
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       const state: LedgerState = {
-        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {}, shortcut_link: setting('shortcut_link') ?? null, flags: parseFlags(setting('flags')) },
+        settings: { home_currency: setting('home_currency') ?? 'USD', rates: parseRates(setting('rates')) ?? {}, shortcut_link: setting('shortcut_link') ?? null, flags: parseFlags(setting('flags')), square_under: Number(setting('square_under')) || null },
         people: rows<Person>(5),
         accounts: rows<Account>(6),
         trips,
@@ -577,7 +577,7 @@ export async function openDb(url: string, authToken?: string) {
       const settingRows = rows<{ key: string; value: string }>(4);
       const setting = (k: string) => settingRows.find((r) => r.key === k)?.value;
       return {
-        settings: { home_currency: setting('home_currency') ?? trips[0]?.currency ?? 'USD', rates: parseRates(setting('rates')) ?? {}, flags: parseFlags(setting('flags')) },
+        settings: { home_currency: setting('home_currency') ?? trips[0]?.currency ?? 'USD', rates: parseRates(setting('rates')) ?? {}, flags: parseFlags(setting('flags')), square_under: Number(setting('square_under')) || null },
         people,
         accounts,
         trips,

@@ -36,8 +36,9 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const foreign = txs.some((t) => t.currency !== home);
   const exact = !h.unconverted.size;
   // Under ₹10 left over from exchange rates and rounding counts as settled; the hero still says how much it is.
-  const settled = (myHome === 0 || (exact && negligible(myHome, home))) && ![...myNet].some(([c, v]) => v !== 0 && !(c === home && negligible(v, home)));
-  const tiny = (amount: number | null) => amount != null && negligible(amount, home);
+  const settled = (myHome === 0 || (exact && negligible(myHome, home, rateCtx.small))) && ![...myNet].some(([c, v]) => v !== 0 && !(c === home && negligible(v, home, rateCtx.small)));
+  const tiny = (amount: number | null) => amount != null && negligible(amount, home, rateCtx.small);
+  const under = `${currencySymbol(home)}${(rateCtx.small ?? 10).toLocaleString('en-IN')}`;
   const isYou = subject === me.id;
   const name = isYou ? 'You' : who(subject);
   const own = isYou ? 'Your' : `${who(subject)}’s`;
@@ -97,12 +98,16 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
               <span className="amt">
                 {p.home != null ? <Money amount={p.home} currency={home} /> : <MoneyList map={p.parts} />}
                 {p.home != null && [...p.parts.keys()].some((c) => c !== home) ? <span className="faint small"><MoneyList map={p.parts} /></span> : null}
-                {tiny(p.home) ? <span className="small">negligible</span> : null}
-                {tiny(p.home) && !simplify ? <SquareButton txs={scopeTxs} from={p.from} to={p.to} /> : null}
               </span>
+              {tiny(p.home) && (
+                <span className="simple-row-note">
+                  <span>Negligible · under {under}</span>
+                  {!simplify && <SquareButton txs={scopeTxs} from={p.from} to={p.to} />}
+                </span>
+              )}
             </div>
           ))}
-          {rows.some((r) => tiny(r.home)) && <div className="panel-foot" data-testid="negligible-note">Under {currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, but nobody needs to pay it. Call it square clears it for good if you both agree.</div>}
+          {rows.some((r) => tiny(r.home)) && <div className="panel-foot" data-testid="negligible-note">Under {under} is left over from exchange rates and rounding: shown so nothing is hidden, but nobody needs to pay it.{featureOn(state, 'square') ? ' Call it square clears it for good if you both agree.' : ''}</div>}
           {rows.length > 0 && simplify && <div className="panel-foot">Fewer payments, same positions: a debt is passed along only where a real chain of debts already runs, so no amount is ever moved between people the money did not flow through.</div>}
         </div>
       </section>

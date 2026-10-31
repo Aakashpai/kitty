@@ -110,7 +110,7 @@ export function squareUp(txs: Tx[], c: RateCtx, a: Id, b: Id): Square[] | null {
     const h = sign * (computeHomeBalances(group, c).pair.get(`${k}|${c.home}`) ?? 0);
     if (h === 0 && x === 0) continue;
     const [from, to, amount, settles] = h >= 0 ? [a, b, h, x] : [b, a, -h, -x];
-    if (amount === 0 || !negligible(amount, c.home) || (settles !== 0 && settles !== amount)) return null; // a part-real, part-rate leftover: settle the real part first
+    if (amount === 0 || !negligible(amount, c.home, c.small) || (settles !== 0 && settles !== amount)) return null; // a part-real, part-rate leftover: settle the real part first
     out.push({ trip_id, from, to, amount, settles });
   }
   return out.length ? out : null;

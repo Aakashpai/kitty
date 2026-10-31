@@ -104,7 +104,7 @@ export function People() {
                   <div className="meta">{tripsOf(p.id)} trip{tripsOf(p.id) === 1 ? '' : 's'}{cur.length ? ` · ${words(cur)}` : p.is_me ? '' : ' · settled'}{p.upi_id ? ` · UPI ${p.upi_id}` : ''}</div>
                 </div>
                 <div className="amt">
-                  {p.is_me ? null : negligible(total, home) ? (
+                  {p.is_me ? null : negligible(total, home, rateCtx.small) ? (
                     <span className="label faint" title="Left over from exchange rates and rounding">{formatAmount(Math.abs(total), home)} · negligible</span>
                   ) : total > 0 ? (
                     <><span className="label pos">owes you</span><span className="amount money pos">{formatAmount(total, home)}</span></>

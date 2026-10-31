@@ -1,10 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import { Bell, BellOff } from 'lucide-react';
 import { ApiError, api, errorText } from '../api.ts';
 import type { DocsState } from '../../engine/index.ts';
 import { deriveMasterKey, makeCheck, newSalt, passesCheck, rememberMaster, unwrapKey, wrapKey } from '../vault.ts';
 import { featureOn, useLedger } from '../store.tsx';
-import { FEATURES, type FeatureKey } from '../../engine/index.ts';
+import { FEATURES, currencySymbol, type FeatureKey } from '../../engine/index.ts';
 import { ErrorBox, Field, Modal } from './ui.tsx';
 
 const b64urlBytes = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
@@ -63,6 +63,30 @@ function Notifications() {
       )}
       <ErrorBox error={err} />
     </div>
+  );
+}
+
+/** How small a leftover must be to count as negligible (and get Call it square), in the home currency. */
+function SquareUnder() {
+  const { state, reload } = useLedger();
+  const saved = state.settings.square_under ?? 10;
+  const [v, setV] = useState(String(saved));
+  const [err, setErr] = useState<string | null>(null);
+  const n = Number(v);
+  const save = async () => {
+    try {
+      await api('PUT', '/api/settings', { square_under: n });
+      await reload();
+      setErr(null);
+    } catch (x) { setErr(errorText(x)); }
+  };
+  return (
+    <form className="plan-row" style={{ borderBottom: '1px solid var(--border)', paddingLeft: 'var(--space-6)' }} onSubmit={(e) => { e.preventDefault(); void save(); }} data-testid="square-under-form">
+      <span className="grow muted small">Negligible under</span>
+      <span className="row" style={{ gap: 'var(--space-1)' }}>{currencySymbol(state.settings.home_currency)}<input inputMode="decimal" value={v} onChange={(e) => setV(e.target.value)} style={{ width: 80 }} aria-label="Negligible under" data-testid="square-under" /></span>
+      <button type="submit" className="small" disabled={!(n > 0) || n === saved}>Save</button>
+      <ErrorBox error={err} />
+    </form>
   );
 }
 
@@ -134,10 +158,13 @@ export function AccountModal({ onClose }: { onClose: () => void }) {
             <p className="muted small" style={{ margin: 0 }}>Switch parts of the app off for everyone, share links included. Nothing is deleted; turn a feature back on and it is all still there.</p>
             <div className="panel">
               {FEATURES.map((f) => (
-                <label className="plan-row check" key={f.key}>
-                  <input type="checkbox" checked={featureOn(state, f.key)} onChange={(e) => void setFlag(f.key, e.target.checked)} data-testid={`flag-${f.key}`} />
-                  <span><strong>{f.label}</strong><span className="muted small" style={{ display: 'block' }}>{f.hint}</span></span>
-                </label>
+                <Fragment key={f.key}>
+                  <label className="plan-row check">
+                    <input type="checkbox" checked={featureOn(state, f.key)} onChange={(e) => void setFlag(f.key, e.target.checked)} data-testid={`flag-${f.key}`} />
+                    <span><strong>{f.label}</strong><span className="muted small" style={{ display: 'block' }}>{f.hint}</span></span>
+                  </label>
+                  {f.key === 'square' && <SquareUnder />}
+                </Fragment>
               ))}
             </div>
             <ErrorBox error={flagErr} />
