@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Copy } from 'lucide-react';
-import { computeBalances, computeHomeBalances, effectsOf, formatAmount, forwardDebts, pairwiseDebts, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, currencySymbol, effectsOf, formatAmount, forwardDebts, negligible, pairwiseDebts, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
 import { copyText, useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, Empty, Money, MoneyList } from './ui.tsx';
@@ -65,6 +65,7 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
   };
   const allText = () => [`Settling up${trip ? ` for ${trip.name}` : ''}:`, ...plan.map((d) => `• ${first(d.from)} → ${first(d.to)}: ${formatAmount(d.amount, d.currency)}${d.currency !== home && rateFor(d.currency) ? ` (≈ ${formatAmount(Math.round(d.amount * rateFor(d.currency)!), home)})` : ''}`), 'Sent from Kitty'].join('\n');
   const view = inHome ? h : b;
+  const tiny = (d: Debt) => d.currency === home && negligible(d.amount, home);
   const pairsV = pairwiseDebts(view);
   const nets = [...view.net].filter(([, m]) => [...m.values()].some((v) => v !== 0)).sort(([a], [c]) => (a === me.id ? -1 : c === me.id ? 1 : nameOf(a).localeCompare(nameOf(c))));
   const usedCurrencies = [...new Set(pairs.map((d) => d.currency).filter((c) => c !== home))];
@@ -88,16 +89,16 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
             <table data-testid="pairwise">
               <tbody>
                 {pairsV.map((d) => (
-                  <tr key={`${d.from}-${d.to}-${d.currency}`}>
+                  <tr key={`${d.from}-${d.to}-${d.currency}`} className={tiny(d) ? 'faint' : undefined}>
                     <td><span className="who"><Person id={d.from} /><span className="arrow"><ArrowRight /></span><Person id={d.to} /></span></td>
-                    <td className="num"><Money amount={d.amount} currency={d.currency} /></td>
-                    {!readOnly && !inHome && <td className="actions"><button className="small" onClick={() => record(d.from, d.to, d.currency, d.amount)}>Settle</button></td>}
+                    <td className="num"><Money amount={d.amount} currency={d.currency} />{tiny(d) ? <div className="small">negligible</div> : null}</td>
+                    {!readOnly && !inHome && <td className="actions">{!tiny(d) && <button className="small" onClick={() => record(d.from, d.to, d.currency, d.amount)}>Settle</button>}</td>}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="panel-foot">{inHome ? `Every debt valued in ${home} and netted per pair.` : `Exact positions from every expense, refund and repayment${tripId != null ? ' tagged to this trip' : ''}. Each currency is kept separate.`}</div>
+          <div className="panel-foot">{inHome ? `Every debt valued in ${home} and netted per pair.` : `Exact positions from every expense, refund and repayment${tripId != null ? ' tagged to this trip' : ''}. Each currency is kept separate.`}{pairsV.some(tiny) ? ` Under ${currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, nothing to settle.` : ''}</div>
         </div>
         <div className="stack">
           <div className="panel">

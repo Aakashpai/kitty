@@ -338,7 +338,7 @@ function TripDetail({ trip }: { trip: Trip }) {
   const [applePay, setApplePay] = useState(false);
   const [busy, run] = useBusy();
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
-  const outside = trip.start_date && trip.end_date ? txs.filter((t) => t.date < trip.start_date! || t.date > trip.end_date!) : [];
+  const outside = trip.start_date && trip.end_date ? txs.filter((t) => t.type !== 'repayment' && t.type !== 'refund' && (t.date < trip.start_date! || t.date > trip.end_date!)) : []; // paying back and refunds come after the trip, so they stay where they are
   // Closing locks a settled trip so nobody shifts old balances by accident; only the owner can reopen it.
   const setClosed = (closed: 0 | 1) => {
     if (closed && !window.confirm(`Close ${trip.name}? Its spending is locked until you reopen it. Settle-ups, comments and receipt photos still work.`)) return;

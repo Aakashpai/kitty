@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, Plus } from 'lucide-react';
-import { computeHomeBalances, formatAmount, pairwiseDebts, shareOf, computeBalances, spendingBy, type Tx } from '../../engine/index.ts';
+import { computeHomeBalances, formatAmount, negligible, pairwiseDebts, shareOf, computeBalances, spendingBy, type Tx } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { useLedger } from '../store.tsx';
 import { useTxForm } from '../components/txFormContext.ts';
@@ -47,6 +47,7 @@ export function Overview() {
   const hb = computeHomeBalances(state.transactions, rateCtx);
   let owedHome = 0, oweHome = 0;
   for (const d of pairwiseDebts(hb)) {
+    if (negligible(d.amount, rateCtx.home)) continue; // exchange-rate leftovers; the Simple view and Balances show them as such
     if (d.to === me.id) owedHome += d.amount;
     if (d.from === me.id) oweHome += d.amount;
   }

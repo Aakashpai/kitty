@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronLeft, Copy, Link2, MoreHorizontal, Plus, UserPlus } from 'lucide-react';
-import { computeHomeBalances, formatAmount, pairwiseDebts, type Invite, type Person, type Share } from '../../engine/index.ts';
+import { computeHomeBalances, formatAmount, negligible, pairwiseDebts, type Invite, type Person, type Share } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { copyText, featureOn, useLedger } from '../store.tsx';
 import { Avatar, DangerButton, Empty, ErrorBox, Spinner, fmtDate, useBusy } from '../components/ui.tsx';
@@ -104,7 +104,9 @@ export function People() {
                   <div className="meta">{tripsOf(p.id)} trip{tripsOf(p.id) === 1 ? '' : 's'}{cur.length ? ` · ${words(cur)}` : p.is_me ? '' : ' · settled'}{p.upi_id ? ` · UPI ${p.upi_id}` : ''}</div>
                 </div>
                 <div className="amt">
-                  {p.is_me ? null : total > 0 ? (
+                  {p.is_me ? null : negligible(total, home) ? (
+                    <span className="label faint" title="Left over from exchange rates and rounding">{formatAmount(Math.abs(total), home)} · negligible</span>
+                  ) : total > 0 ? (
                     <><span className="label pos">owes you</span><span className="amount money pos">{formatAmount(total, home)}</span></>
                   ) : total < 0 ? (
                     <><span className="label neg">you owe</span><span className="amount money neg">{formatAmount(-total, home)}</span></>

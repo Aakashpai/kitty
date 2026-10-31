@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, forwardDebts, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, currencySymbol, formatAmount, forwardDebts, negligible, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
 import { featureOn, useLedger } from '../store.tsx';
 import { ExportButton, TxList } from '../components/TxList.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
@@ -34,7 +34,9 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
   const myHome = h.net.get(subject)?.get(home) ?? 0;
   const foreign = txs.some((t) => t.currency !== home);
   const exact = !h.unconverted.size;
-  const settled = myHome === 0 && ![...myNet.values()].some((v) => v !== 0);
+  // Under ₹10 left over from exchange rates and rounding counts as settled; the hero still says how much it is.
+  const settled = (myHome === 0 || (exact && negligible(myHome, home))) && ![...myNet].some(([c, v]) => v !== 0 && !(c === home && negligible(v, home)));
+  const tiny = (amount: number | null) => amount != null && negligible(amount, home);
   const isYou = subject === me.id;
   const name = isYou ? 'You' : who(subject);
   const own = isYou ? 'Your' : `${who(subject)}’s`;
@@ -69,9 +71,10 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
     <div className="simple stack">
       {onScope && state.trips.length > 0 && <ScopeSeg value={scope} onChange={(s) => { setCat(null); onScope(s); }} testId="simple-scope" />}
       {(!readOnly || focus != null) && (
-        <div className={`simple-hero ${myHome > 0 ? 'pos' : myHome < 0 ? 'neg' : ''}`} data-testid="simple-hero">
+        <div className={`simple-hero ${settled ? '' : myHome > 0 ? 'pos' : myHome < 0 ? 'neg' : ''}`} data-testid="simple-hero">
           <div className="label">{settled ? `${name} ${isYou ? 'are' : 'is'} settled up` : myHome > 0 ? `${name} ${isYou ? 'are' : 'is'} owed` : myHome < 0 ? `${name} ${isYou ? 'owe' : 'owes'}` : `${own} position`}</div>
-          {myHome !== 0 && exact && <div className="big">{formatAmount(Math.abs(myHome), home)}</div>}
+          {!settled && myHome !== 0 && exact && <div className="big">{formatAmount(Math.abs(myHome), home)}</div>}
+          {settled && myHome !== 0 && <div className="muted small">{formatAmount(Math.abs(myHome), home)} left over from exchange rates, too small to settle</div>}
           {foreign && !settled && <div className={exact ? 'muted small' : 'big'}><MoneyList map={myNet} sign /></div>}
         </div>
       )}
@@ -88,14 +91,16 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
         <div className="panel" data-testid="simple-settle">
           {rows.length === 0 && <div className="simple-row muted">Nobody owes anyone anything.</div>}
           {rows.map((p) => (
-            <div className="simple-row" key={`${p.from}-${p.to}`}>
+            <div className={`simple-row ${tiny(p.home) ? 'faint' : ''}`} key={`${p.from}-${p.to}`}>
               <span className="pair"><Person id={p.from} /><span className="arrow"><ArrowRight /></span><Person id={p.to} /></span>
               <span className="amt">
                 {p.home != null ? <Money amount={p.home} currency={home} /> : <MoneyList map={p.parts} />}
                 {p.home != null && [...p.parts.keys()].some((c) => c !== home) ? <span className="faint small"><MoneyList map={p.parts} /></span> : null}
+                {tiny(p.home) ? <span className="small">negligible</span> : null}
               </span>
             </div>
           ))}
+          {rows.some((r) => tiny(r.home)) && <div className="panel-foot" data-testid="negligible-note">Under {currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, but nobody needs to pay it.</div>}
           {rows.length > 0 && simplify && <div className="panel-foot">Fewer payments, same positions: a debt is passed along only where a real chain of debts already runs, so no amount is ever moved between people the money did not flow through.</div>}
         </div>
       </section>

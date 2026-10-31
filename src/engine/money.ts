@@ -6,6 +6,9 @@ const DECIMALS: Record<string, number> = {
 
 export const decimalsOf = (currency: string): number => DECIMALS[currency.toUpperCase()] ?? 2;
 
+/** Non-zero but under 10 of the currency (₹10): what exchange rates and rounding leave behind. Shown, never asked for. */
+export const negligible = (amount: number, currency: string) => amount !== 0 && Math.abs(amount) < 10 * 10 ** decimalsOf(currency);
+
 /** "1,234.50" -> 123450 (for a 2-decimal currency). Returns null for anything that is not a clean number. */
 export function parseAmount(text: string, currency: string): number | null {
   const m = /^(-?)(\d*)(?:\.(\d*))?$/.exec(text.replace(/[,\s_]/g, ''));
