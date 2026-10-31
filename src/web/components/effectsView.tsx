@@ -15,6 +15,7 @@ export function EffectsView({ tx }: { tx: TxInput | Tx }) {
     const amt = formatAmount(d.amount, d.currency);
     if (tx.type === 'expense') lines.push(`${who(d.from)} ${owes(d.from)} ${who(d.to)} ${amt}`);
     else if (tx.type === 'refund') lines.push(`Reduces what ${who(d.to)} ${owes(d.to)} ${who(d.from)} by ${amt}`);
+    else if (d.amount === 0) lines.push('Clears an exchange-rate leftover; no currency balance changes');
     else lines.push(`Settles ${amt} of what ${who(d.to)} ${owes(d.to)} ${who(d.from)}`);
   }
   const trip = tx.trip_id != null ? trips.get(tx.trip_id) : null;

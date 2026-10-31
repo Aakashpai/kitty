@@ -1,6 +1,6 @@
 import type { Account, Id, Tx } from './types.ts';
 import { conversionOf, effectsOf, type Debt, type RateCtx } from './effects.ts';
-import { allocate } from './money.ts';
+import { allocate, negligible } from './money.ts';
 
 export interface Balances {
   /** account_id -> balance in the account's currency (opening balance + every delta) */
@@ -71,6 +71,8 @@ export function computeHomeBalances(txs: Tx[], c: RateCtx): HomeBalances {
       const parts = allocate(leg, tx.splits.map((s) => s.amount));
       const byPerson = new Map(tx.splits.map((s, i) => [s.person_id, parts[i] ?? 0]));
       converted = debts.map((d) => byPerson.get(tx.type === 'expense' ? d.from : d.to) ?? 0);
+    } else if (tx.type === 'repayment' && conv.kind === 'same') {
+      converted = [tx.amount]; // worth what was paid, also when it settles a little less (a leftover called square)
     } else {
       converted = debts.map((d) => Math.round(d.amount * conv.rate));
     }
@@ -85,6 +87,33 @@ export function computeHomeBalances(txs: Tx[], c: RateCtx): HomeBalances {
     });
   }
   return b;
+}
+
+export interface Square { trip_id: Id | null; from: Id; to: Id; amount: number; settles: number }
+
+/**
+ * Calling a pair square: one home-currency repayment per trip the leftover comes from. A pure exchange-rate leftover
+ * settles nothing in any currency (per-currency balances stay as they are); a small home-currency debt is written off. Null when any part
+ * is a real debt: a foreign-currency balance, or a leftover that is not negligible.
+ */
+export function squareUp(txs: Tx[], c: RateCtx, a: Id, b: Id): Square[] | null {
+  const out: Square[] = [];
+  for (const trip_id of new Set(txs.map((t) => t.trip_id))) {
+    const group = txs.filter((t) => t.trip_id === trip_id);
+    const k = a < b ? `${a}|${b}` : `${b}|${a}`, sign = a < b ? 1 : -1; // pair keys hold what the lower id owes
+    let x = 0;
+    for (const [key, v] of computeBalances(group).pair) {
+      if (!key.startsWith(`${k}|`) || v === 0) continue;
+      if (!key.endsWith(`|${c.home}`)) return null;
+      x = sign * v;
+    }
+    const h = sign * (computeHomeBalances(group, c).pair.get(`${k}|${c.home}`) ?? 0);
+    if (h === 0 && x === 0) continue;
+    const [from, to, amount, settles] = h >= 0 ? [a, b, h, x] : [b, a, -h, -x];
+    if (amount === 0 || !negligible(amount, c.home) || (settles !== 0 && settles !== amount)) return null; // a part-real, part-rate leftover: settle the real part first
+    out.push({ trip_id, from, to, amount, settles });
+  }
+  return out.length ? out : null;
 }
 
 const byDebt = (x: Debt, y: Debt) => x.currency.localeCompare(y.currency) || x.from - y.from || x.to - y.to;

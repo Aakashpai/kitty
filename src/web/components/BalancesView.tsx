@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Copy } from 'lucide-react';
-import { computeBalances, computeHomeBalances, currencySymbol, effectsOf, formatAmount, forwardDebts, negligible, pairwiseDebts, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, currencySymbol, effectsOf, emptyTx, formatAmount, forwardDebts, negligible, pairwiseDebts, squareUp, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
+import { api, errorText } from '../api.ts';
 import { copyText, useLedger } from '../store.tsx';
+import { localToday } from './QuickAdd.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, Empty, Money, MoneyList } from './ui.tsx';
 
@@ -9,6 +11,31 @@ type Mode = 'currency' | 'home';
 const readMode = (): Mode => {
   try { return localStorage.getItem('balances-mode') === 'home' ? 'home' : 'currency'; } catch { return 'currency'; }
 };
+
+/** "Call it square" on a negligible leftover: after asking, saves rounding entries that clear it for good; nothing is paid. */
+export function SquareButton({ txs, from, to }: { txs: Tx[]; from: Id; to: Id }) {
+  const { rateCtx, readOnly, people, reload } = useLedger();
+  const [busy, setBusy] = useState(false);
+  const plan = useMemo(() => squareUp(txs, rateCtx, from, to), [txs, rateCtx, from, to]);
+  if (readOnly || !plan) return null;
+  const home = rateCtx.home, first = (id: Id) => people.get(id)?.name.split(' ')[0] ?? `#${id}`;
+  const total = plan.reduce((s, q) => s + q.amount, 0);
+  const go = async () => {
+    if (!window.confirm(`Call ${first(from)} and ${first(to)} square? Kitty saves a ${formatAmount(total, home)} rounding entry so this leftover is gone for good. No money changes hands, and you can delete the entry to undo it.`)) return;
+    setBusy(true);
+    try {
+      for (const q of plan) {
+        await api('POST', '/api/transactions', { ...emptyTx('repayment', localToday(), home), description: 'Called square: exchange-rate leftover', notes: `No money changed hands. Clears what exchange rates and rounding left over (under ${currencySymbol(home)}10); balances in each currency are unchanged.`, trip_id: q.trip_id, amount: q.amount, payer_id: q.from, payee_id: q.to, settled_currency: home, settled_amount: q.settles, full_settlement: 1 });
+      }
+      await reload();
+    } catch (e) {
+      window.alert(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <button className="small ghost" disabled={busy} onClick={() => void go()} data-testid="call-square">Call it square</button>;
+}
 
 /** Who owes whom (exact, per currency), each person's net, and a minimal settlement plan; optionally everything valued in the home currency. */
 export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) {
@@ -92,13 +119,13 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
                   <tr key={`${d.from}-${d.to}-${d.currency}`} className={tiny(d) ? 'faint' : undefined}>
                     <td><span className="who"><Person id={d.from} /><span className="arrow"><ArrowRight /></span><Person id={d.to} /></span></td>
                     <td className="num"><Money amount={d.amount} currency={d.currency} />{tiny(d) ? <div className="small">negligible</div> : null}</td>
-                    {!readOnly && !inHome && <td className="actions">{!tiny(d) && <button className="small" onClick={() => record(d.from, d.to, d.currency, d.amount)}>Settle</button>}</td>}
+                    {!readOnly && (!inHome || tiny(d)) && <td className="actions">{tiny(d) ? <SquareButton txs={txs} from={d.from} to={d.to} /> : <button className="small" onClick={() => record(d.from, d.to, d.currency, d.amount)}>Settle</button>}</td>}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="panel-foot">{inHome ? `Every debt valued in ${home} and netted per pair.` : `Exact positions from every expense, refund and repayment${tripId != null ? ' tagged to this trip' : ''}. Each currency is kept separate.`}{pairsV.some(tiny) ? ` Under ${currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, nothing to settle.` : ''}</div>
+          <div className="panel-foot">{inHome ? `Every debt valued in ${home} and netted per pair.` : `Exact positions from every expense, refund and repayment${tripId != null ? ' tagged to this trip' : ''}. Each currency is kept separate.`}{pairsV.some(tiny) ? ` Under ${currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, nothing to settle; Call it square clears it for good if you both agree.` : ''}</div>
         </div>
         <div className="stack">
           <div className="panel">

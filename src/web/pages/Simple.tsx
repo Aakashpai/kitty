@@ -3,6 +3,7 @@ import { ArrowRight } from 'lucide-react';
 import { computeBalances, computeHomeBalances, currencySymbol, formatAmount, forwardDebts, negligible, pairwiseDebts, type Id, type Tx } from '../../engine/index.ts';
 import { featureOn, useLedger } from '../store.tsx';
 import { ExportButton, TxList } from '../components/TxList.tsx';
+import { SquareButton } from '../components/BalancesView.tsx';
 import { TxDetail } from '../components/TxDetail.tsx';
 import { CategorySpend, type CategoryPick } from '../components/CategorySpend.tsx';
 import { Avatar, Money, MoneyList } from '../components/ui.tsx';
@@ -97,10 +98,11 @@ export function SimpleView({ scope, onScope, focus: focusProp }: { scope: string
                 {p.home != null ? <Money amount={p.home} currency={home} /> : <MoneyList map={p.parts} />}
                 {p.home != null && [...p.parts.keys()].some((c) => c !== home) ? <span className="faint small"><MoneyList map={p.parts} /></span> : null}
                 {tiny(p.home) ? <span className="small">negligible</span> : null}
+                {tiny(p.home) && !simplify ? <SquareButton txs={scopeTxs} from={p.from} to={p.to} /> : null}
               </span>
             </div>
           ))}
-          {rows.some((r) => tiny(r.home)) && <div className="panel-foot" data-testid="negligible-note">Under {currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, but nobody needs to pay it.</div>}
+          {rows.some((r) => tiny(r.home)) && <div className="panel-foot" data-testid="negligible-note">Under {currencySymbol(home)}10 is left over from exchange rates and rounding: shown so nothing is hidden, but nobody needs to pay it. Call it square clears it for good if you both agree.</div>}
           {rows.length > 0 && simplify && <div className="panel-foot">Fewer payments, same positions: a debt is passed along only where a real chain of debts already runs, so no amount is ever moved between people the money did not flow through.</div>}
         </div>
       </section>

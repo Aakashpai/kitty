@@ -141,8 +141,9 @@ export function TxForm({ initial, existing, onClose, onSaved }: Props) {
     const from_amount = fromAcct && fromAcct.currency !== tx.currency ? num(texts.from_amount, fromAcct.currency, `Amount in ${fromAcct.currency}`) : null;
     const to_amount = toAcct && toAcct.currency !== tx.currency ? num(texts.to_amount, toAcct.currency, `Amount in ${toAcct.currency}`) : null;
     const fee_amount = isMove ? num(texts.fee_amount, tx.currency, 'Fee') : null;
-    const settled_currency = tx.type === 'repayment' && crossSettle ? (tx.settled_currency ?? '') : null;
-    const settled_amount = settled_currency && settled_currency !== tx.currency ? num(texts.settled_amount, settled_currency, `Settled ${settled_currency}`) : null;
+    const square = tx.type === 'repayment' && tx.settled_amount === 0 && tx.settled_currency === tx.currency; // a leftover called square settles nothing; editing keeps it so
+    const settled_currency = square ? tx.currency : tx.type === 'repayment' && crossSettle ? (tx.settled_currency ?? '') : null;
+    const settled_amount = square ? 0 : settled_currency && settled_currency !== tx.currency ? num(texts.settled_amount, settled_currency, `Settled ${settled_currency}`) : null;
     let splits: Split[] = [];
     let items: TxInput['items'] = null;
     if (isSplit && byItem) {

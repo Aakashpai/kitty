@@ -1,6 +1,6 @@
 import type { Account, Id, LedgerCtx, Person, TxInput } from './types.ts';
 import { TX_TYPES } from './types.ts';
-import { decimalsOf } from './money.ts';
+import { decimalsOf, negligible } from './money.ts';
 import { refundedTotal } from './balances.ts';
 
 const isMinor = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n);
@@ -163,7 +163,8 @@ export function validateTx(tx: TxInput, ctx: LedgerCtx): string[] {
       const sc = tx.settled_currency ?? tx.currency;
       if (!/^[A-Z]{3}$/.test(sc)) errs.push('Settled currency must be a 3-letter code');
       if (sc === tx.currency) {
-        if (tx.settled_amount != null && tx.settled_amount !== tx.amount) errs.push('Settled amount must equal the amount paid when the currency is the same');
+        // Equal, except a negligible leftover called square, which settles nothing (see squareUp)
+        if (tx.settled_amount != null && tx.settled_amount !== tx.amount && !(tx.settled_amount === 0 && negligible(tx.amount, tx.currency))) errs.push('Settled amount must equal the amount paid when the currency is the same');
       } else if (!isMinor(tx.settled_amount) || tx.settled_amount <= 0) {
         errs.push(`Enter how much ${sc} this payment settles`);
       }
