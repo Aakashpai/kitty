@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Copy } from 'lucide-react';
-import { computeBalances, computeHomeBalances, formatAmount, forwardDebts, pairwiseDebts, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
+import { computeBalances, computeHomeBalances, effectsOf, formatAmount, forwardDebts, pairwiseDebts, toMajor, type Debt, type Id, type Tx } from '../../engine/index.ts';
 import { copyText, useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, Empty, Money, MoneyList } from './ui.tsx';
@@ -12,8 +12,7 @@ const readMode = (): Mode => {
 
 /** Who owes whom (exact, per currency), each person's net, and a minimal settlement plan; optionally everything valued in the home currency. */
 export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) {
-  const { who, me, people, readOnly: viewOnly, rateCtx, trips } = useLedger();
-  const readOnly = viewOnly || !!(tripId != null && trips.get(tripId)?.closed); // a closed trip takes no new repayments
+  const { who, me, people, readOnly, rateCtx } = useLedger();
   const openForm = useTxForm();
   const [mode, setModeState] = useState<Mode>(readMode);
   const setMode = (m: Mode) => { setModeState(m); try { localStorage.setItem('balances-mode', m); } catch { /* ignore */ } };
@@ -28,12 +27,23 @@ export function BalancesView({ txs, tripId }: { txs: Tx[]; tripId: Id | null }) 
   const rateFor = (cur: string) => (cur === home ? 1 : (trip?.rates?.[cur] ?? rateCtx.rates[cur] ?? null));
   const nameOf = (id: Id) => people.get(id)?.name ?? `#${id}`;
   const Person = ({ id }: { id: Id }) => <span className="who"><Avatar id={id} name={nameOf(id)} small />{who(id)}</span>;
+  /** The trip a pair's open debt in one currency comes from, when it is all from one trip; null when mixed or outside trips. */
+  const sourceTrip = (from: Id, to: Id, currency: string): Id | null => {
+    const left = new Map<Id | null, number>();
+    for (const t of txs) for (const d of effectsOf(t).debts) {
+      const sign = d.currency !== currency ? 0 : d.from === from && d.to === to ? 1 : d.from === to && d.to === from ? -1 : 0;
+      if (sign) left.set(t.trip_id, (left.get(t.trip_id) ?? 0) + sign * d.amount);
+    }
+    const open = [...left].filter(([, v]) => v !== 0);
+    return open.length === 1 ? open[0]![0] : null;
+  };
   const record = (from: Id, to: Id, currency: string, amount: number) => {
     const rate = inHome && currency !== home ? rateFor(currency) : null;
     const desc = `${who(from)} settles with ${who(to)}`.replace('You settles', 'You settle');
+    const trip_id = tripId ?? sourceTrip(from, to, currency); // settling from All still lands on the trip it settles, so that trip's balances clear too
     openForm({ initial: rate
-      ? { type: 'repayment', payer_id: from, payee_id: to, currency: home, amount: Math.round(amount * rate), settled_currency: currency, settled_amount: amount, trip_id: tripId, full_settlement: 1, description: desc }
-      : { type: 'repayment', payer_id: from, payee_id: to, currency, amount, trip_id: tripId, full_settlement: 1, description: desc } });
+      ? { type: 'repayment', payer_id: from, payee_id: to, currency: home, amount: Math.round(amount * rate), settled_currency: currency, settled_amount: amount, trip_id, full_settlement: 1, description: desc }
+      : { type: 'repayment', payer_id: from, payee_id: to, currency, amount, trip_id, full_settlement: 1, description: desc } });
   };
   const [copied, setCopied] = useState<number | null>(null);
   const first = (id: Id) => nameOf(id).split(' ')[0]!;

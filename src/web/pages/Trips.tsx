@@ -341,7 +341,7 @@ function TripDetail({ trip }: { trip: Trip }) {
   const outside = trip.start_date && trip.end_date ? txs.filter((t) => t.date < trip.start_date! || t.date > trip.end_date!) : [];
   // Closing locks a settled trip so nobody shifts old balances by accident; only the owner can reopen it.
   const setClosed = (closed: 0 | 1) => {
-    if (closed && !window.confirm(`Close ${trip.name}? Nobody can add, change or delete its entries until you reopen it. Comments and receipt photos still work.`)) return;
+    if (closed && !window.confirm(`Close ${trip.name}? Its spending is locked until you reopen it. Settle-ups, comments and receipt photos still work.`)) return;
     void run(async () => {
       try {
         await api('PUT', `/api/trips/${trip.id}`, { ...trip, closed });
@@ -373,7 +373,7 @@ function TripDetail({ trip }: { trip: Trip }) {
       {trip.closed ? (
         <div className="locked-note" data-testid="trip-closed">
           <Lock />
-          <span>Closed · entries are locked{owner ? '' : ' until the owner reopens it'}</span>
+          <span>Closed · spending is locked, settle-ups still work</span>
           {owner && <button className="small" disabled={busy} onClick={() => setClosed(0)} data-testid="reopen-trip"><LockOpen />Reopen</button>}
         </div>
       ) : null}

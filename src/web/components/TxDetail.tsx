@@ -197,8 +197,8 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
             </ul>
           </details>
         )}
-        {!readOnly && trip?.closed ? <div className="faint small row" data-testid="tx-locked"><Lock />{trip.name} is closed, so this entry is locked.</div> : null}
-        {!readOnly && !trip?.closed && <div className="row between">
+        {!readOnly && trip?.closed && tx.type !== 'repayment' ? <div className="faint small row" data-testid="tx-locked"><Lock />{trip.name} is closed, so this entry is locked.</div> : null}
+        {!readOnly && (!trip?.closed || tx.type === 'repayment') && <div className="row between">
           <div className="row">
             <button onClick={() => openForm({ existing: tx, onSaved: onClose })} data-testid="edit-tx"><Pencil />Edit</button>
             {tx.type !== 'refund' && <button onClick={() => openForm({ initial: againPrefill(tx) })} data-testid="again-tx"><CopyPlus />Add again</button>}

@@ -297,8 +297,10 @@ export async function createApp(opts: AppOptions) {
     const tx = normalizeTx(id == null ? c.body : { ...c.body, id });
     const ctx = await ctxOf(c.user);
     const errors = validateTx(tx, ctx); // a member's ctx holds only their trips, people and accounts
-    // A closed trip is settled: nothing goes into it, and nothing in it changes or leaves, until the owner reopens it.
-    const shut = (await db.closedTrip(tx.trip_id)) ?? (id != null ? await db.closedTrip(ctx.transactions.find((t) => t.id === id)?.trip_id) : undefined);
+    // A closed trip's spending is locked until the owner reopens it; settle-ups (repayments) still go in, so its own balances can clear.
+    const old = id != null ? ctx.transactions.find((t) => t.id === id) : undefined;
+    const settling = tx.type === 'repayment' && (!old || old.type === 'repayment');
+    const shut = settling ? undefined : (await db.closedTrip(tx.trip_id)) ?? (old ? await db.closedTrip(old.trip_id) : undefined);
     if (shut) throw new HttpError(409, `${shut} is closed. Reopen it to change its entries.`);
     if (!isOwner(c)) {
       if (id != null && !ctx.transactions.some((t) => t.id === id)) throw new HttpError(404, 'Transaction not found');
@@ -323,7 +325,8 @@ export async function createApp(opts: AppOptions) {
   const seeTx = (c: Ctx) => mustSee(c, (s) => s.transactions.some((t) => t.id === Number(c.params.id)), 'Transaction');
   route('DELETE', '/api/transactions/:id', 'user', async (c) => {
     await seeTx(c);
-    const shut = await db.closedTrip((await db.getTx(Number(c.params.id))).trip_id);
+    const old = await db.getTx(Number(c.params.id));
+    const shut = old.type === 'repayment' ? undefined : await db.closedTrip(old.trip_id);
     if (shut) throw new HttpError(409, `${shut} is closed. Reopen it to change its entries.`);
     return (await db.deleteTx(Number(c.params.id)), { ok: true });
   });
