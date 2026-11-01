@@ -34,6 +34,8 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --scan-bg: #ffffff; /* full-screen tickets and driver cards: white in both themes, so scanners and tired eyes read them */
+  --scan-fg: #000000;
   --font: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -598,3 +600,25 @@ td .who { flex-wrap: wrap; white-space: normal; }
 .txrow .impact .money { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .txrow .impact.pos .money { color: var(--pos); }
 .txrow .impact.neg .money { color: var(--neg); }
+
+/* ---------- bookings ---------- */
+.btn.small { height: 28px; padding: 0 10px; font-size: 12px; }
+.booking { min-width: 0; }
+.booking.next { box-shadow: 0 0 0 1px var(--accent); }
+.booking-top { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.booking-top strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.booking-time { display: inline-flex; align-items: center; gap: var(--space-1); font-family: var(--mono); font-size: 15px; flex: none; }
+.booking-time svg { width: 14px; height: 14px; color: var(--text-3); }
+.booking-line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.booking-ref { flex: 1; min-width: 0; font-family: var(--mono); font-size: 20px; font-weight: 600; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.booking-notes { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.booking-img { height: auto; padding: 0; align-self: flex-start; max-width: 100%; overflow: hidden; background: var(--scan-bg); }
+.booking-img img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; }
+.booking-day { margin: var(--space-2) 0 0; font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.06em; }
+.booking-next { flex-direction: column; align-items: flex-start; gap: 2px; text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+.fullscreen { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: var(--space-4); background: var(--scan-bg); color: var(--scan-fg); }
+.fullscreen > img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.fullscreen .close { position: absolute; top: var(--space-3); right: var(--space-3); color: var(--scan-fg); }
+.driver { max-width: 100%; text-align: center; }
+.driver .big { margin: 0 0 var(--space-4); font-size: clamp(28px, 9vw, 64px); font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.driver p { font-size: 18px; overflow-wrap: anywhere; }

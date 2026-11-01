@@ -11,7 +11,7 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  if (req.method !== 'GET' || url.origin !== location.origin) return;
   const keep = (key) => (res) => {
     if (res.ok) {
       const copy = res.clone();
@@ -19,6 +19,13 @@ self.addEventListener('fetch', (e) => {
     }
     return res;
   };
+  // Bookings work with no signal: booking photos never change under one id (cache first); a share link's page is
+  // fetched fresh when online and its last copy served when not. The rest of /api always goes to the network.
+  if (url.pathname.startsWith('/api/')) {
+    if (/^\/api\/(shared\/[^/]+\/)?plan-images\/\d+$/.test(url.pathname)) e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then(keep(req))));
+    else if (/^\/api\/shared\/[^/]+$/.test(url.pathname)) e.respondWith(fetch(req).then(keep(req)).catch(() => caches.match(req).then((hit) => hit || Response.error())));
+    return;
+  }
   // The page: network first, so a deploy shows at once; the saved copy only when offline.
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then(keep('/')).catch(() => caches.match('/').then((hit) => hit || Response.error())));

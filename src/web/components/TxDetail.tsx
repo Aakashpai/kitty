@@ -32,7 +32,7 @@ export function againPrefill(tx: Tx): Partial<TxInput> {
 }
 
 /** Phone photos are several MB; a 1600px JPEG keeps a receipt readable at a few hundred KB. */
-async function shrink(file: File): Promise<string> {
+export async function shrink(file: File): Promise<string> {
   const img = await createImageBitmap(file);
   const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
   const canvas = document.createElement('canvas');

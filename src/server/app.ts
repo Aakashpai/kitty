@@ -6,7 +6,7 @@ import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
 import { CAPS, CHUNK, MAX_DOC, isStorageKey, objectStoreFromEnv } from './storage.ts';
-import { FEATURES, type DocItem, type Id, type PlanItem, type PlanMeta } from '../engine/index.ts';
+import { BOOKING_TYPES, FEATURES, type BookingType, type DocItem, type Id, type PlanItem, type PlanMeta } from '../engine/index.ts';
 import { announce, publicKey } from './push.ts';
 
 interface Ctx {
@@ -224,7 +224,7 @@ export async function createApp(opts: AppOptions) {
     const trip_id = c.body.trip_id == null || c.body.trip_id === '' ? null : int(c.body.trip_id, 'Trip');
     const person_id = c.body.person_id == null || c.body.person_id === '' ? null : int(c.body.person_id, 'Person');
     await mustSee(c, (s) => s.trips.some((t) => t.id === trip_id) && (person_id == null || s.people.some((p) => p.id === person_id)), 'Trip'); // members share one of their trips only
-    return db.createShare({ token: randomToken(18), trip_id, person_id, label: optStr(c.body.label), created_by: c.user!.id });
+    return db.createShare({ token: randomToken(18), trip_id, person_id, label: optStr(c.body.label), created_by: c.user!.id, bookings_only: flag(c.body.bookings_only) });
   });
   route('DELETE', '/api/shares/:id', 'user', async (c) => {
     await mustSee(c, (s) => s.shares.some((x) => x.id === Number(c.params.id)), 'Link');
@@ -233,7 +233,7 @@ export async function createApp(opts: AppOptions) {
   route('GET', '/api/shared/:token', 'public', async (c) => {
     const share = await db.getShare(c.params.token ?? '');
     if (!share) throw new HttpError(404, 'This link has been turned off or never existed.');
-    return db.loadSharedState(share);
+    return { ...(await db.loadSharedState(share)), as_of: new Date().toISOString() };
   });
 
   // --- ledger ---------------------------------------------------------------------------------
@@ -558,7 +558,7 @@ export async function createApp(opts: AppOptions) {
   });
 
   // --- trip plan: board, stay shortlist with votes, checklists. Members edit; a trip link can vote and tick --------
-  const PLAN_KINDS = ['day', 'task', 'pack', 'stay', 'link', 'note'] as const;
+  const PLAN_KINDS = ['day', 'task', 'pack', 'stay', 'link', 'note', 'booking'] as const;
   const planKind = (v: unknown): PlanItem['kind'] => {
     const k = String(v ?? '');
     if (!(PLAN_KINDS as readonly string[]).includes(k)) throw new HttpError(400, 'Unknown plan item kind');
@@ -571,6 +571,16 @@ export async function createApp(opts: AppOptions) {
     if (price != null && price < 0) throw new HttpError(400, 'Price cannot be negative');
     return { price, distance: optStr(o.distance), chosen: o.chosen === true };
   };
+  const bookingMeta = (v: unknown): PlanMeta => {
+    const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+    const type = String(o.type ?? 'other') as BookingType;
+    if (!BOOKING_TYPES.includes(type)) throw new HttpError(400, 'Unknown booking type');
+    const time = optStr(o.time);
+    if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new HttpError(400, 'Time must be HH:MM');
+    const short = (x: unknown) => optStr(x)?.slice(0, 300) ?? null;
+    return { type, time, ref: short(o.ref), place: short(o.place), local: short(o.local), phone: short(o.phone) };
+  };
+  const metaFor = (kind: PlanItem['kind'], v: unknown) => (kind === 'stay' ? planMeta(v) : kind === 'booking' ? bookingMeta(v) : null);
   const planUrl = (v: unknown, kind: PlanItem['kind']) => {
     const s = optStr(v);
     if (s && (kind === 'link' || kind === 'stay') && !/^https?:\/\//i.test(s)) throw new HttpError(400, 'Links must start with http:// or https://');
@@ -586,14 +596,14 @@ export async function createApp(opts: AppOptions) {
     const trip_id = Number(c.params.id);
     await seeTrip(c, trip_id);
     const kind = planKind(c.body.kind);
-    return db.createPlanItem({ trip_id, kind, title: str(c.body.title, 'Title', 300), body: planUrl(c.body.body, kind), meta: kind === 'stay' ? planMeta(c.body.meta) : null, day: c.body.day ? date(c.body.day, 'Day') : null, assignee_id: optId(c.body.assignee_id, 'Assignee'), created_by: c.user!.person_id ?? null });
+    return db.createPlanItem({ trip_id, kind, title: str(c.body.title, 'Title', 300), body: planUrl(c.body.body, kind), meta: metaFor(kind, c.body.meta), day: c.body.day ? date(c.body.day, 'Day') : null, assignee_id: optId(c.body.assignee_id, 'Assignee'), created_by: c.user!.person_id ?? null });
   });
   route('PUT', '/api/plan/:id', 'user', async (c) => {
     const it = await planOf(c);
     const patch: Parameters<typeof db.updatePlanItem>[1] = {};
     if (c.body.title !== undefined) patch.title = str(c.body.title, 'Title', 300);
     if (c.body.body !== undefined) patch.body = planUrl(c.body.body, it.kind);
-    if (c.body.meta !== undefined) patch.meta = it.kind === 'stay' ? planMeta(c.body.meta) : null;
+    if (c.body.meta !== undefined) patch.meta = metaFor(it.kind, c.body.meta);
     if (c.body.day !== undefined) patch.day = c.body.day ? date(c.body.day, 'Day') : null;
     if (c.body.done !== undefined) patch.done = flag(c.body.done);
     if (c.body.assignee_id !== undefined) patch.assignee_id = optId(c.body.assignee_id, 'Assignee');
@@ -608,10 +618,41 @@ export async function createApp(opts: AppOptions) {
     if (person == null) throw new HttpError(400, 'Your login is not linked to a person');
     return { voted: await db.toggleVote(it.id, person) };
   });
+  // Booking photos (tickets, QR codes, boarding passes): stored apart from the board and served by id, so they cache for good.
+  route('POST', '/api/plan/:id/image', 'user', async (c) => {
+    const it = await planOf(c);
+    if (it.kind !== 'booking') throw new HttpError(400, 'Only bookings take a photo');
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(String(c.body.data ?? ''));
+    if (!m) throw new HttpError(400, 'Attach a JPEG, PNG or WebP photo');
+    if (m[2]!.length > 3_000_000) throw new HttpError(413, 'That photo is too large');
+    await roomFor('database', m[2]!.length);
+    return { image_id: await db.setPlanImage(it.id, m[1]!, m[2]!) };
+  });
+  route('DELETE', '/api/plan/:id/image', 'user', async (c) => (await db.removePlanImage((await planOf(c)).id), { ok: true }));
+  const planImage = async (id: Id) => {
+    const img = await db.getPlanImage(id);
+    if (!img) throw new HttpError(404, 'Photo not found');
+    return { img, it: await db.planItem(img.item_id) };
+  };
+  route('GET', '/api/plan-images/:id', 'user', async (c) => {
+    const { img, it } = await planImage(Number(c.params.id));
+    await seeTrip(c, it.trip_id);
+    return new Raw(img.mime, Buffer.from(img.data, 'base64'));
+  });
+  route('GET', '/api/shared/:token/plan-images/:id', 'public', async (c) => {
+    const share = await db.getShare(c.params.token ?? '');
+    if (!share) throw new HttpError(404, 'This link has been turned off or never existed.');
+    const { img, it } = await planImage(Number(c.params.id));
+    // The same rows the link's page shows: its trip's board, or the bookings of a person's trips.
+    const shown = share.trip_id != null ? it.trip_id === share.trip_id && (!share.bookings_only || it.kind === 'booking') : share.person_id != null && it.kind === 'booking' && (await db.isTripMember(it.trip_id, share.person_id));
+    if (!shown) throw new HttpError(404, 'Photo not found');
+    return new Raw(img.mime, Buffer.from(img.data, 'base64'));
+  });
+
   // From a trip link: pick your name, then vote or tick. Trusted as far as the link is.
   const linkMember = async (c: Ctx) => {
     const share = await db.getShare(c.params.token ?? '');
-    if (!share || share.trip_id == null) throw new HttpError(404, 'This link has been turned off or never existed.');
+    if (!share || share.trip_id == null || share.bookings_only) throw new HttpError(404, 'This link has been turned off or never existed.');
     const it = await db.planItem(Number(c.params.id));
     if (it.trip_id !== share.trip_id) throw new HttpError(404, 'Not on this trip');
     const person = int(c.body.person_id, 'Person');

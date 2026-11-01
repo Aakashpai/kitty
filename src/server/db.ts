@@ -271,6 +271,15 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (item_id, person_id)
   );
   `,
+  `
+  CREATE TABLE plan_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL UNIQUE,
+    mime TEXT NOT NULL,
+    data TEXT NOT NULL
+  );
+  ALTER TABLE shares ADD COLUMN bookings_only INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 const parseBudget = (v: unknown): TripBudget | null => {
@@ -290,11 +299,12 @@ export const nextDate = (date: string, every: Recurring['every'], anchor = Numbe
   return new Date(Date.UTC(y, m, Math.min(anchor, last))).toISOString().slice(0, 10);
 };
 
+const IMAGE_ID = '(SELECT i.id FROM plan_images i WHERE i.item_id = p.id) AS image_id';
 const parsePlan = (p: PlanItem): PlanItem => {
   if (typeof p.meta === 'string') { try { p.meta = JSON.parse(p.meta) as PlanItem['meta']; } catch { p.meta = null; } }
   return p;
 };
-const PLAN_LABEL: Record<PlanItem['kind'], string> = { day: 'Itinerary', task: 'To-do', pack: 'Packing', stay: 'Stay option', link: 'Link', note: 'Note' };
+const PLAN_LABEL: Record<PlanItem['kind'], string> = { day: 'Itinerary', task: 'To-do', pack: 'Packing', stay: 'Stay option', link: 'Link', note: 'Note', booking: 'Booking' };
 
 const parseFlags = (v: unknown): Record<string, boolean> => {
   if (typeof v !== 'string' || !v) return {};
@@ -466,7 +476,7 @@ export async function openDb(url: string, authToken?: string) {
         { sql: 'SELECT id, every, next_date, template, created_by FROM recurring WHERE active = 1 ORDER BY next_date, id' },
         { sql: 'SELECT id, tx_id FROM receipts ORDER BY id' },
         { sql: 'SELECT id, tx_id, person_id, body, created_at FROM comments ORDER BY id' },
-        { sql: 'SELECT * FROM plan_items ORDER BY trip_id, kind, sort, id' },
+        { sql: `SELECT p.*, ${IMAGE_ID} FROM plan_items p ORDER BY trip_id, kind, sort, id` },
         { sql: 'SELECT item_id, person_id FROM plan_votes' },
         ...(owner ? [{ sql: `SELECT ${USER_COLS} FROM users ORDER BY id` }, { sql: "SELECT * FROM invites WHERE used_at IS NULL AND expires_at > datetime('now') ORDER BY id DESC" }] : []),
       ];
@@ -523,13 +533,18 @@ export async function openDb(url: string, authToken?: string) {
       return user && !owner ? memberSlice(state, user.person_id, user.id) : state;
     },
     /** Read-only view for a share link: one trip, or one person's entries across trips. No accounts, no personal money movements, no history. */
-    loadSharedState: async (share: { trip_id: Id | null; person_id: Id | null }): Promise<LedgerState> => {
+    loadSharedState: async (share: { trip_id: Id | null; person_id: Id | null; bookings_only?: 0 | 1 | null }): Promise<LedgerState> => {
       const { trip_id: tripId, person_id: personId } = share;
+      const bookingsOnly = !!share.bookings_only && tripId != null;
       const scope = ["type IN ('expense','refund','repayment')"];
+      if (bookingsOnly) scope.push('0'); // a family link carries no money at all
       const args: number[] = [];
       if (tripId != null) { scope.push('trip_id = ?'); args.push(tripId); }
       if (personId != null) { scope.push('(payer_id = ? OR payee_id = ? OR id IN (SELECT tx_id FROM splits WHERE person_id = ?))'); args.push(personId, personId, personId); }
       const where = scope.join(' AND ');
+      // A trip link gets the trip's board (bookings only on a family link); a person link gets the bookings of their trips.
+      const planWhere = tripId != null ? `p.trip_id = ?${bookingsOnly ? " AND p.kind = 'booking'" : ''}` : "p.kind = 'booking' AND p.trip_id IN (SELECT trip_id FROM trip_members WHERE person_id = ?)";
+      const planArgs = [tripId ?? personId ?? -1];
       let rs;
       try {
         rs = await client.batch([
@@ -540,8 +555,8 @@ export async function openDb(url: string, authToken?: string) {
           { sql: 'SELECT key, value FROM settings' },
           { sql: 'SELECT id, name, is_me, archived, upi_id FROM people ORDER BY is_me DESC, LOWER(name)' },
           { sql: 'SELECT id, person_id, name, type, currency, archived FROM accounts ORDER BY id' },
-          { sql: 'SELECT * FROM plan_items WHERE trip_id = ? ORDER BY kind, sort, id', args: [tripId ?? -1] },
-          { sql: 'SELECT item_id, person_id FROM plan_votes WHERE item_id IN (SELECT id FROM plan_items WHERE trip_id = ?)', args: [tripId ?? -1] },
+          { sql: `SELECT p.*, ${IMAGE_ID} FROM plan_items p WHERE ${planWhere} ORDER BY kind, sort, id`, args: planArgs },
+          { sql: `SELECT item_id, person_id FROM plan_votes WHERE item_id IN (SELECT id FROM plan_items p WHERE ${planWhere})`, args: planArgs },
         ], 'read');
       } catch (e) {
         throw friendly(e);
@@ -549,7 +564,8 @@ export async function openDb(url: string, authToken?: string) {
       const rows = <T>(i: number): T[] => (rs[i]?.rows ?? []) as unknown as T[];
       const transactions = rows<Tx>(2);
       const members = rows<{ trip_id: Id; person_id: Id }>(1);
-      const used = new Set(transactions.map((t) => t.trip_id));
+      const plan = rows<PlanItem>(7).map(parsePlan);
+      const used = new Set([...transactions.map((t) => t.trip_id), ...plan.map((p) => p.trip_id)]);
       const trips = rows<Trip>(0).filter((t) => (tripId != null ? t.id === tripId : used.has(t.id)));
       if (tripId != null && !trips.length) throw new HttpError(404, 'This link no longer works');
       for (const trip of trips) {
@@ -585,10 +601,11 @@ export async function openDb(url: string, authToken?: string) {
         reconciliations: [],
         activity: [],
         shares: [],
-        plan: rows<PlanItem>(7).map(parsePlan),
+        plan,
         votes: rows<PlanVote>(8),
         user: null,
         shared_person_id: personId,
+        shared_bookings_only: bookingsOnly,
       };
     },
     getSetting: (key: string) => read(async (t) => (await t.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key]))?.value ?? null),
@@ -832,11 +849,11 @@ export async function openDb(url: string, authToken?: string) {
     deleteInvite: (id: Id) => inTx(async (t) => {
       if (!(await t.run('DELETE FROM invites WHERE id = ?', [id])).changes) throw new HttpError(404, 'Invite not found');
     }),
-    createShare: (s: { token: string; trip_id: Id | null; person_id: Id | null; label: string | null; created_by: Id }) => inTx(async (t) => {
+    createShare: (s: { token: string; trip_id: Id | null; person_id: Id | null; label: string | null; created_by: Id; bookings_only?: 0 | 1 }) => inTx(async (t) => {
       if (s.trip_id == null && s.person_id == null) throw new HttpError(400, 'Pick a trip or a person to share');
       if (s.trip_id != null && !(await t.get('SELECT 1 FROM trips WHERE id = ?', [s.trip_id]))) throw new HttpError(404, 'Trip not found');
       if (s.person_id != null && !(await t.get('SELECT 1 FROM people WHERE id = ?', [s.person_id]))) throw new HttpError(404, 'Person not found');
-      const row = (await t.get<{ id: number }>('INSERT INTO shares (token, trip_id, person_id, label, created_by) VALUES (?, ?, ?, ?, ?) RETURNING id', [s.token, s.trip_id, s.person_id, s.label, s.created_by]))!;
+      const row = (await t.get<{ id: number }>('INSERT INTO shares (token, trip_id, person_id, label, created_by, bookings_only) VALUES (?, ?, ?, ?, ?, ?) RETURNING id', [s.token, s.trip_id, s.person_id, s.label, s.created_by, s.trip_id != null && s.bookings_only ? 1 : 0]))!;
       await logIn(t, 'create', 'share', row.id, s.person_id != null ? `Created a view-only link for person #${s.person_id}` : `Created a view-only link for trip #${s.trip_id}`);
       return (await t.get<Share>('SELECT * FROM shares WHERE id = ?', [row.id]))!;
     }),
@@ -866,6 +883,7 @@ export async function openDb(url: string, authToken?: string) {
       }
       if (!(await t.get('SELECT 1 FROM people WHERE is_me = 1'))) throw new HttpError(400, 'Backup has no "me" person');
       await t.run('DELETE FROM receipts WHERE tx_id NOT IN (SELECT id FROM transactions)');
+      await t.run('DELETE FROM plan_images WHERE item_id NOT IN (SELECT id FROM plan_items)');
       await logIn(t, 'restore', 'ledger', null, `Restored backup from ${String(data.exported_at ?? 'unknown date')}`);
     }),
     // --- documents: encrypted in the browser; here only wrapped keys, names and sizes --------------------------
@@ -979,6 +997,13 @@ export async function openDb(url: string, authToken?: string) {
     }),
     chunkCount: (key: string) => read(async (t) => (await t.get<{ n: number }>('SELECT COUNT(*) AS n FROM doc_chunks WHERE storage_key = ?', [key]))!.n),
     // --- trip plan: board items and votes ----------------------------------------------------------------------
+    /** A booking's photo: replacing it gives it a new id, so a phone's saved copy of an id never goes stale. */
+    setPlanImage: (itemId: Id, mime: string, data: string) => inTx(async (t) => {
+      await t.run('DELETE FROM plan_images WHERE item_id = ?', [itemId]);
+      return (await t.get<{ id: number }>('INSERT INTO plan_images (item_id, mime, data) VALUES (?, ?, ?) RETURNING id', [itemId, mime, data]))!.id;
+    }),
+    removePlanImage: (itemId: Id) => inTx((t) => t.run('DELETE FROM plan_images WHERE item_id = ?', [itemId])),
+    getPlanImage: (id: Id) => read((t) => t.get<{ item_id: Id; mime: string; data: string }>('SELECT item_id, mime, data FROM plan_images WHERE id = ?', [id])),
     planItem: (id: Id) => read(async (t) => {
       const r = await t.get<PlanItem>('SELECT * FROM plan_items WHERE id = ?', [id]);
       if (!r) throw new HttpError(404, 'Plan item not found');
@@ -1013,6 +1038,7 @@ export async function openDb(url: string, authToken?: string) {
       const it = await t.get<PlanItem>('SELECT * FROM plan_items WHERE id = ?', [id]);
       if (!it) throw new HttpError(404, 'Plan item not found');
       await t.run('DELETE FROM plan_votes WHERE item_id = ?', [id]);
+      await t.run('DELETE FROM plan_images WHERE item_id = ?', [id]);
       await t.run('DELETE FROM plan_items WHERE id = ?', [id]);
       await logIn(t, 'delete', 'plan', id, `Removed ${PLAN_LABEL[it.kind].toLowerCase()}: ${it.title}`);
     }),

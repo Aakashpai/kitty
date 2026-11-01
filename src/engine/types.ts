@@ -204,6 +204,7 @@ export interface Share {
   created_by: Id | null;
   created_at: string;
   revoked: 0 | 1;
+  bookings_only?: 0 | 1; // a family link: the trip's bookings and nothing about money
 }
 
 export interface LedgerState extends LedgerCtx {
@@ -218,6 +219,8 @@ export interface LedgerState extends LedgerCtx {
   votes?: PlanVote[];
   user: UserPublic | null; // who is signed in (null for shared read-only views)
   shared_person_id?: Id | null; // person share links: whose point of view the page takes
+  shared_bookings_only?: boolean; // family links: bookings only
+  as_of?: string; // share links: when the server sent this copy (an offline phone shows an older one)
   users?: UserPublic[]; // owner only
   invites?: Invite[]; // owner only
 }
@@ -274,8 +277,11 @@ export interface DocsState { storage: 'r2' | 'db'; vault: Vault | null; folders:
 export interface SharedDocs { folder: Pick<DocFolder, 'id' | 'name' | 'trip_id'>; folders: Pick<DocFolder, 'id' | 'name' | 'parent_id'>[]; documents: Omit<DocItem, 'storage_key'>[] }
 
 // --- trip plan: the board behind each trip ---------------------------------------------------------------------
-export type PlanKind = 'day' | 'task' | 'pack' | 'stay' | 'link' | 'note';
-export interface PlanMeta { price?: number | null; distance?: string | null; chosen?: boolean }
+export type PlanKind = 'day' | 'task' | 'pack' | 'stay' | 'link' | 'note' | 'booking';
+export const BOOKING_TYPES = ['flight', 'stay', 'ticket', 'ride', 'emergency', 'other'] as const;
+export type BookingType = (typeof BOOKING_TYPES)[number];
+/** stay options: price, distance, chosen. bookings: type, time (HH:MM), ref (PNR or booking number), address, the address in the local script, phone. */
+export interface PlanMeta { price?: number | null; distance?: string | null; chosen?: boolean; type?: BookingType; time?: string | null; ref?: string | null; place?: string | null; local?: string | null; phone?: string | null }
 export interface PlanItem {
   id: Id;
   trip_id: Id;
@@ -289,5 +295,6 @@ export interface PlanItem {
   sort: number;
   created_by: Id | null;
   created_at: string;
+  image_id?: Id | null; // bookings: a ticket, QR code or boarding pass photo, fetched on its own
 }
 export interface PlanVote { item_id: Id; person_id: Id }

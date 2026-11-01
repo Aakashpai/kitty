@@ -3,6 +3,7 @@ import type { LedgerState } from '../../engine/index.ts';
 import { api, errorText } from '../api.ts';
 import { LedgerProvider, useLedger } from '../store.tsx';
 import { TripView } from './Trips.tsx';
+import { Bookings } from '../components/Bookings.tsx';
 import { SimpleView } from './Simple.tsx';
 import { APP_NAME, Logo, fmtDate } from '../components/ui.tsx';
 
@@ -10,14 +11,17 @@ function SharedInner({ token, simple, onRefresh }: { token: string; simple: bool
   const { state, me } = useLedger();
   const [scope, setScope] = useState('');
   const person = state.shared_person_id != null ? me : null;
+  const family = !!state.shared_bookings_only;
   const trip = state.trips[0];
   if (!person && !trip) return null;
+  // Bookings first on the phone while a trip is on or coming up (person links: each of their trips).
+  const live = state.trips.filter((t) => !t.end_date || t.end_date >= new Date().toLocaleDateString('en-CA')).filter((t) => (state.plan ?? []).some((p) => p.trip_id === t.id && p.kind === 'booking'));
   return (
     <div className="shared">
       <header className="shared-head">
         <span className="brand" style={{ padding: 0 }}><span className="mark"><Logo size={16} /></span><span>{APP_NAME}</span></span>
         <span className="row">
-          {!person && <a className="btn" href={simple ? `#/s/${token}` : `#/s/${token}/simple`} data-testid="shared-toggle">{simple ? 'Full view' : 'Simple view'}</a>}
+          {!person && !family && <a className="btn" href={simple ? `#/s/${token}` : `#/s/${token}/simple`} data-testid="shared-toggle">{simple ? 'Full view' : 'Simple view'}</a>}
           <span className="badge">View only</span>
         </span>
       </header>
@@ -25,11 +29,16 @@ function SharedInner({ token, simple, onRefresh }: { token: string; simple: bool
         <div className="page-head">
           <div>
             <h1>{person ? person.name : trip!.name}</h1>
-            <div className="sub">{person ? 'Only the entries you are part of, and where things stand' : `${trip!.start_date ? `${fmtDate(trip!.start_date)} – ${fmtDate(trip!.end_date)} · ` : ''}${trip!.currency}${trip!.notes ? ` · ${trip!.notes}` : ''}`}</div>
+            <div className="sub">{person ? 'Only the entries you are part of, and where things stand' : family ? (trip!.start_date ? `${fmtDate(trip!.start_date)} – ${fmtDate(trip!.end_date)}` : 'Bookings') : `${trip!.start_date ? `${fmtDate(trip!.start_date)} – ${fmtDate(trip!.end_date)} · ` : ''}${trip!.currency}${trip!.notes ? ` · ${trip!.notes}` : ''}`}</div>
           </div>
         </div>
-        {person ? <SimpleView scope={scope} onScope={setScope} /> : simple ? <SimpleView scope={String(trip!.id)} /> : <TripView trip={trip!} shareToken={token} onRefresh={onRefresh} />}
-        <p className="faint small" style={{ marginTop: 24 }}>Shared read-only. Amounts stay in the currency they were spent in; nothing here can be edited.</p>
+        {family ? <Bookings trip={trip!} shareToken={token} /> : (
+          <>
+            {(person || simple) && live.map((t) => <section key={t.id} className="stack tight" style={{ marginBottom: 24 }}>{person && <h2>{t.name} · bookings</h2>}<Bookings trip={t} shareToken={token} /></section>)}
+            {person ? <SimpleView scope={scope} onScope={setScope} /> : simple ? <SimpleView scope={String(trip!.id)} /> : <TripView trip={trip!} shareToken={token} onRefresh={onRefresh} />}
+          </>
+        )}
+        <p className="faint small" style={{ marginTop: 24 }}>{family ? 'Shared read-only: the trip’s bookings, nothing about money.' : 'Shared read-only. Amounts stay in the currency they were spent in; nothing here can be edited.'}</p>
       </main>
     </div>
   );

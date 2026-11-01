@@ -12,6 +12,7 @@ import { CategorySpend, type CategoryPick } from '../components/CategorySpend.ts
 import { Avatar, BudgetBar, CategoryGlyph, DangerButton, TripMark, Empty, ErrorBox, Field, Modal, MoneyList, Spinner, Stat, fmtDate, hueStyle, useBusy } from '../components/ui.tsx';
 import { RatesEditor } from '../components/RatesEditor.tsx';
 import { TripPlan } from '../components/TripPlan.tsx';
+import { Bookings } from '../components/Bookings.tsx';
 import { ShortcutSetup } from '../components/ShortcutSetup.tsx';
 import { computeHomeBalances } from '../../engine/index.ts';
 
@@ -135,12 +136,13 @@ export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Pe
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [simple, setSimple] = useState(false);
+  const [family, setFamily] = useState(false);
   const [busy, run] = useBusy();
   const links = state.shares.filter((x) => (person ? x.person_id === person.id : x.trip_id === trip?.id && x.person_id == null));
-  const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}${simple || person ? '/simple' : ''}`;
+  const urlOf = (x: Share) => `${window.location.origin}${window.location.pathname}#/s/${x.token}${(simple && !x.bookings_only) || person ? '/simple' : ''}`;
   const create = () => run(async () => {
     try {
-      await api('POST', '/api/shares', { trip_id: trip?.id ?? null, person_id: person?.id ?? null, label: label || null });
+      await api('POST', '/api/shares', { trip_id: trip?.id ?? null, person_id: person?.id ?? null, label: label || (family ? 'Family' : null), bookings_only: !person && family });
       setLabel('');
       await reload();
       setErr(null);
@@ -166,6 +168,7 @@ export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Pe
       <div className="stack">
         <p className="muted small">{person ? `Anyone with the link sees only the entries ${person.name} is part of, their share of each one, and what they owe or are owed, valued exactly as you see them. Nothing can be edited and your account balances stay private.` : 'Anyone with a link sees this trip’s expenses, balances and settlement plan. They cannot edit anything, and your account balances stay private. Turn a link off any time.'}</p>
         {!person && <label className="row small simple-check"><input type="checkbox" checked={simple} onChange={(e) => setSimple(e.target.checked)} data-testid="share-simple" />Copy links as the simple view (easier to read on a phone; viewers can switch)</label>}
+        {!person && <label className="row small simple-check"><input type="checkbox" checked={family} onChange={(e) => setFamily(e.target.checked)} data-testid="share-family" />New link is a family link: only the bookings (flights, hotels, tickets, emergency card), no money</label>}
         {links.length > 0 && (
           <div className="panel">
             <div className="table-wrap">
@@ -174,7 +177,7 @@ export function ShareModal({ trip, person, onClose }: { trip?: Trip; person?: Pe
                   {links.map((x) => (
                     <tr key={x.id}>
                       <td>
-                        <div>{x.label || 'View-only link'}</div>
+                        <div>{x.label || 'View-only link'}{x.bookings_only ? <span className="badge" style={{ marginLeft: 6 }}>Bookings only</span> : null}</div>
                         <div className="faint small">Created {fmtDate(x.created_at.slice(0, 10))}</div>
                       </td>
                       <td className="actions">
@@ -249,7 +252,9 @@ const tripOver = (trip: Trip) => !!trip.closed || (!!trip.end_date && trip.end_d
 export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareToken?: string; onRefresh?: () => Promise<void> }) {
   const { state, me, who, people, readOnly, rateCtx } = useLedger();
   // A trip that has no entries yet is being planned: open on the board.
-  const [tab, setTab] = useState<'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (state.transactions.some((t) => t.trip_id === trip.id) || !featureOn(state, 'plan') || tripOver(trip) ? 'transactions' : 'plan'));
+  // From 3 days before until the last day, a trip with bookings opens on them.
+  const onTrip = !!trip.start_date && !!trip.end_date && today() <= trip.end_date && new Date(trip.start_date + 'T00:00:00').getTime() - Date.now() < 3 * 864e5;
+  const [tab, setTab] = useState<'bookings' | 'plan' | 'transactions' | 'categories' | 'days' | 'balances' | 'people'>(() => (onTrip && (state.plan ?? []).some((p) => p.trip_id === trip.id && p.kind === 'booking') ? 'bookings' : state.transactions.some((t) => t.trip_id === trip.id) || !featureOn(state, 'plan') || tripOver(trip) ? 'transactions' : 'plan'));
   const [selected, setSelected] = useState<number | null>(null);
   const [cat, setCat] = useState<CategoryPick | null>(null);
   const txs = state.transactions.filter((t) => t.trip_id === trip.id);
@@ -287,8 +292,9 @@ export function TripView({ trip, shareToken, onRefresh }: { trip: Trip; shareTok
         {fees.size > 0 && <Stat label="Fees on transfers" foot="Kept out of spending"><MoneyList map={fees} /></Stat>}
       </div>
       <div className="tabs">
-        {(['plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).filter((t) => t !== 'plan' || (featureOn(state, 'plan') && !tripOver(trip))).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
+        {(['bookings', 'plan', 'transactions', 'categories', 'days', 'balances', 'people'] as const).filter((t) => t !== 'plan' || (featureOn(state, 'plan') && !tripOver(trip))).map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`trip-tab-${t}`}>{t === 'plan' ? 'Plan' : t === 'bookings' ? 'Bookings' : t === 'people' ? 'Per person' : t === 'categories' ? 'By category' : t === 'days' ? 'By day' : t[0]!.toUpperCase() + t.slice(1)}</button>)}
       </div>
+      {tab === 'bookings' && <Bookings trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
       {tab === 'plan' && featureOn(state, 'plan') && !tripOver(trip) && <TripPlan trip={trip} shareToken={shareToken} onRefresh={onRefresh} />}
       {tab === 'transactions' && (
         <div className="stack tight">
