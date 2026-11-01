@@ -90,6 +90,32 @@ function SquareUnder() {
   );
 }
 
+type StorageUse = { files: number; database: number; caps: { files: number; database: number }; bucket: boolean };
+const gb = (n: number) => (n >= 1e9 ? `${+(n / 1e9).toFixed(2)} GB` : `${+(n / 1e6).toFixed(1)} MB`);
+
+/** How full the two free-plan stores are; the server refuses uploads past each ceiling. */
+function Storage() {
+  const [s, setS] = useState<StorageUse | null>(null);
+  useEffect(() => { void api<StorageUse>('GET', '/api/storage').then(setS).catch(() => setS(null)); }, []);
+  if (!s) return null;
+  const rows: [string, number, number][] = [
+    ...(s.bucket ? [['Documents · Cloudflare R2, free up to 10 GB', s.files, s.caps.files] as [string, number, number]] : []),
+    ['Entries & bill photos · Turso, free up to 5 GB', s.database, s.caps.database],
+  ];
+  return (
+    <section className="stack tight" data-testid="storage">
+      <h3>Storage</h3>
+      <p className="muted small" style={{ margin: 0 }}>Uploads stop at {s.bucket ? `${gb(s.caps.files)} and ` : ''}{gb(s.caps.database)}, a little under each free limit, so nothing is ever billed.</p>
+      {rows.map(([label, used, cap]) => (
+        <div key={label} className="stack tight">
+          <div className="row between"><span className="small">{label}</span><span className="small muted">{gb(used)} of {gb(cap)}</span></div>
+          <span className={`meter${used > cap * 0.9 ? ' over' : ''}`}><i style={{ width: `${Math.min(100, (used / cap) * 100)}%` }} /></span>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 export function AccountModal({ onClose }: { onClose: () => void }) {
   const { user, state, reload } = useLedger();
   const [flagErr, setFlagErr] = useState<string | null>(null);
@@ -170,6 +196,7 @@ export function AccountModal({ onClose }: { onClose: () => void }) {
             <ErrorBox error={flagErr} />
           </section>
         )}
+        {user?.role === 'owner' && <Storage />}
         <form className="stack" onSubmit={(e) => void submit(e)} data-testid="password-form">
           <h3>Change password</h3>
           <Field label="Current password"><input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} data-testid="pw-current" /></Field>

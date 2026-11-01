@@ -5,7 +5,7 @@ import { ACCOUNT_TYPES, allocate, formatAmount, guessCategory, normalizeTx, pars
 import { HttpError, involves, openDb, type Db } from './db.ts';
 import { RateLimiter, createSession, hashPassword, isEmail, parseCookies, passwordFingerprint, randomToken, readSession, tokenHash, verifyPassword } from './auth.ts';
 import { seed } from './seed.ts';
-import { CHUNK, MAX_DOC, isStorageKey, objectStoreFromEnv } from './storage.ts';
+import { CAPS, CHUNK, MAX_DOC, isStorageKey, objectStoreFromEnv } from './storage.ts';
 import { FEATURES, type DocItem, type Id, type PlanItem, type PlanMeta } from '../engine/index.ts';
 import { announce, publicKey } from './push.ts';
 
@@ -412,12 +412,19 @@ export async function createApp(opts: AppOptions) {
   });
   route('POST', '/api/push/off', 'user', async (c) => (await db.removePushSub(str(c.body.endpoint, 'Endpoint', 1000)), { ok: true }));
 
+  /** Refuses an upload that would take a store past its free-plan ceiling (CAPS). */
+  const roomFor = async (kind: keyof typeof CAPS, bytes: number) => {
+    const used = (await db.storageUse())[kind];
+    if (used + bytes > CAPS[kind]) throw new HttpError(507, `Storage is nearly full: ${(used / 1e9).toFixed(2)} of ${CAPS[kind] / 1e9} GB used, the most the free plan allows. Delete some ${kind === 'files' ? 'documents' : 'bill photos or documents'} first.`);
+  };
+
   // Receipt photos arrive already shrunk by the browser, as a data URL.
   route('POST', '/api/transactions/:id/receipts', 'user', async (c) => {
     await seeTx(c);
     const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(String(c.body.data ?? ''));
     if (!m) throw new HttpError(400, 'Attach a JPEG, PNG or WebP photo');
     if (m[2]!.length > 3_000_000) throw new HttpError(413, 'That photo is too large');
+    await roomFor('database', m[2]!.length);
     return db.addReceipt(Number(c.params.id), m[1]!, m[2]!, c.user!.person_id);
   });
   route('GET', '/api/receipts/:id', 'user', async (c) => {
@@ -481,6 +488,7 @@ export async function createApp(opts: AppOptions) {
   /** How the browser fetches a document's ciphertext: one signed URL (R2) or a chunk URL plus how many chunks. */
   const location = async (doc: DocItem, chunkUrl: string) => (store ? { url: await store.downloadUrl(doc.storage_key) } : { url: chunkUrl, chunks: await db.chunkCount(doc.storage_key) });
   route('GET', '/api/docs', 'owner', async () => ({ storage: store?.kind ?? 'db', ...(await db.docsState()) }));
+  route('GET', '/api/storage', 'owner', async () => ({ ...(await db.storageUse()), caps: CAPS, bucket: !!store }));
   route('POST', '/api/docs/vault', 'owner', async (c) => (await db.createVault({ salt: b64(c.body.salt, 'Salt'), check_iv: b64(c.body.check_iv, 'Check'), check_ct: b64(c.body.check_ct, 'Check') }), { ok: true }));
   route('PUT', '/api/docs/vault', 'owner', async (c) => {
     const folders = (Array.isArray(c.body.folders) ? c.body.folders : []).map((f) => {
@@ -503,6 +511,7 @@ export async function createApp(opts: AppOptions) {
     const folder = await db.getFolder(int(c.body.folder_id, 'Folder'));
     const size = int(c.body.size, 'Size');
     if (size <= 0 || size > MAX_DOC) throw new HttpError(400, 'Files can be up to 200 MB');
+    await roomFor(store ? 'files' : 'database', size);
     const storage_key = `d${folder.id}_${randomToken(18)}`;
     return store ? { storage_key, url: await store.uploadUrl(storage_key) } : { storage_key, url: `/api/docs/blob/${storage_key}`, chunk: CHUNK };
   });

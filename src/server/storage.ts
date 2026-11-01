@@ -9,6 +9,8 @@ import { AwsClient } from 'aws4fetch';
  */
 export const CHUNK = 512 * 1024;
 export const MAX_DOC = 200 * 1024 * 1024;
+/** Free-plan ceilings with headroom (Cloudflare R2 gives 10 GB, Turso 5 GB): new uploads stop at 95%. */
+export const CAPS = { files: 9.5e9, database: 4.75e9 };
 
 export interface ObjectStore {
   kind: 'r2';

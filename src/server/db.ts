@@ -869,6 +869,14 @@ export async function openDb(url: string, authToken?: string) {
       await logIn(t, 'restore', 'ledger', null, `Restored backup from ${String(data.exported_at ?? 'unknown date')}`);
     }),
     // --- documents: encrypted in the browser; here only wrapped keys, names and sizes --------------------------
+    /** Bytes in use: the database file (entries, bill photos, in-database documents) and all documents' sizes. */
+    storageUse: () => read(async (t) => {
+      const files = (await t.get<{ n: number | null }>('SELECT SUM(size) AS n FROM documents'))?.n ?? 0;
+      // The file's real size; a host that refuses the pragma gets the big columns added up instead.
+      const database = await t.get<{ n: number }>('SELECT page_count * page_size AS n FROM pragma_page_count(), pragma_page_size()').then((r) => r?.n ?? 0)
+        .catch(async () => (await t.get<{ n: number | null }>('SELECT (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM receipts) + (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM doc_chunks) AS n'))?.n ?? 0);
+      return { files: Number(files), database: Number(database) };
+    }),
     docsState: () => read(async (t) => ({
       vault: (await t.get<Vault>('SELECT salt, check_iv, check_ct FROM vault WHERE id = 1')) ?? null,
       folders: await t.all<DocFolder>('SELECT * FROM doc_folders ORDER BY (trip_id IS NOT NULL), LOWER(name), id'),
