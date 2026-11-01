@@ -232,6 +232,10 @@ tr.clickable.on td { background: var(--surface-2); }
 .quick-amount span { font-size: 28px; color: var(--text-3); font-family: var(--mono); }
 .quick-amount input { flex: 1; min-width: 0; height: 52px; font-size: 32px; font-family: var(--mono); border: 0; background: transparent; padding: 0; box-shadow: none; }
 .quick-add .seg button svg { width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px; }
+.quick-place { flex-wrap: nowrap; min-width: 0; font-size: 13.5px; }
+.quick-place > svg { width: 15px; height: 15px; flex: none; color: var(--accent); }
+.quick-place > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-place .hint { margin-left: auto; flex: none; }
 .locked-note { display: flex; align-items: center; gap: var(--space-2); min-height: 40px; padding: 4px 6px 4px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: 13px; }
 .locked-note > svg { width: 15px; height: 15px; flex: none; color: var(--text-3); }
 .locked-note > span { flex: 1; min-width: 0; }
