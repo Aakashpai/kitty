@@ -98,7 +98,7 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
   if (tx.type === 'repayment') rows.push(['Intent', tx.full_settlement ? 'Settles the remaining balance' : 'Partial repayment']);
   if (tx.method) rows.push(['Method', tx.method]);
   const parts = paymentGroup(tx) ? state.transactions.filter((t) => paymentGroup(t) === paymentGroup(tx)) : [];
-  if (parts.length > 1) rows.push(['Part of', `One payment of ${formatAmount(parts.reduce((s, p) => s + p.amount, 0), tx.currency)}: ${parts.map((p) => `${p.trip_id != null ? (trips.get(p.trip_id)?.name ?? 'trip') : 'personal'} ${formatAmount(p.amount, p.currency)}`).join(' + ')}`]);
+  if (parts.length > 1) rows.push(['Part of', `One payment of ${formatAmount(parts.reduce((s, p) => s + p.amount, 0), tx.currency)}: ${parts.map((p) => `${p.trip_id != null ? (trips.get(p.trip_id)?.name ?? 'trip') : 'personal'} ${formatAmount(p.amount, p.currency)}${p.payee_id !== tx.payee_id ? ` (for ${who(p.payee_id)})` : ''}`).join(' + ')}`]);
   else if (tx.reference) rows.push(['Reference', tx.reference]);
   if (tx.notes) rows.push(['Notes', tx.notes]);
   if (original) rows.push(['Refund of', `${original.description} (${formatAmount(original.amount, original.currency)}, ${fmtDate(original.date)})`]);

@@ -97,7 +97,7 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
         const one = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l, as);
         const mine = one && { ...one, amount: parts.reduce((sum, p) => sum + (myImpact(p, l, as)?.amount ?? 0), 0) };
         const amount = parts.reduce((sum, p) => sum + p.amount, 0);
-        const where = parts.length > 1 ? parts.map((p) => (p.trip_id != null ? l.trips.get(p.trip_id)?.name : 'personal')).join(' + ') : tx.trip_id != null ? l.trips.get(tx.trip_id)?.name : null;
+        const where = parts.length > 1 ? [...new Set(parts.map((p) => (p.trip_id != null ? l.trips.get(p.trip_id)?.name : 'personal')))].join(' + ') : tx.trip_id != null ? l.trips.get(tx.trip_id)?.name : null;
         const by = !l.readOnly && tx.added_by != null && tx.added_by !== l.me.id ? `by ${l.who(tx.added_by)}` : null;
         const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, (showTrip || parts.length > 1) && where, by].filter(Boolean).join(' · ');
         return (
