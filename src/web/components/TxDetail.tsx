@@ -6,7 +6,7 @@ import { today, useLedger } from '../store.tsx';
 import { useTxForm } from './txFormContext.ts';
 import { Avatar, ErrorBox, Modal, Money, Spinner, TypeBadge, TypeIcon, fmtDate, fmtWhen, useBusy } from './ui.tsx';
 import { EffectsView } from './effectsView.tsx';
-import { txWho } from './TxList.tsx';
+import { paymentGroup, txWho } from './TxList.tsx';
 
 /** Prefill for a refund against an expense: same trip/currency/recipient, shares pro-rata. */
 export function refundPrefill(tx: Tx, all: Tx[]): Partial<TxInput> {
@@ -97,7 +97,9 @@ export function TxDetail({ tx, onClose }: { tx: Tx; onClose: () => void }) {
   if (tx.settled_currency && tx.settled_currency !== tx.currency) rows.push(['Settles', formatAmount(tx.settled_amount ?? 0, tx.settled_currency)]);
   if (tx.type === 'repayment') rows.push(['Intent', tx.full_settlement ? 'Settles the remaining balance' : 'Partial repayment']);
   if (tx.method) rows.push(['Method', tx.method]);
-  if (tx.reference) rows.push(['Reference', tx.reference]);
+  const parts = paymentGroup(tx) ? state.transactions.filter((t) => paymentGroup(t) === paymentGroup(tx)) : [];
+  if (parts.length > 1) rows.push(['Part of', `One payment of ${formatAmount(parts.reduce((s, p) => s + p.amount, 0), tx.currency)}: ${parts.map((p) => `${p.trip_id != null ? (trips.get(p.trip_id)?.name ?? 'trip') : 'personal'} ${formatAmount(p.amount, p.currency)}`).join(' + ')}`]);
+  else if (tx.reference) rows.push(['Reference', tx.reference]);
   if (tx.notes) rows.push(['Notes', tx.notes]);
   if (original) rows.push(['Refund of', `${original.description} (${formatAmount(original.amount, original.currency)}, ${fmtDate(original.date)})`]);
 

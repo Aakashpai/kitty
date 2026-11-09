@@ -64,6 +64,12 @@ export function myImpact(tx: Tx, l: Ledger, as: number = l.me.id): { amount: num
   }
 }
 
+/**
+ * One real payment that settles several trips (or a trip and a personal debt) is stored as one part per trip, so every
+ * trip's balance stays exact; the parts share a `group:` reference and lists show them as a single row.
+ */
+export const paymentGroup = (tx: Tx) => (tx.type === 'repayment' && tx.reference?.startsWith('group:') ? `${tx.reference}|${tx.currency}` : null);
+
 /** Downloads exactly these entries as a spreadsheet Excel opens (one column per person's share). */
 export function ExportButton({ txs, title }: { txs: Tx[]; title: string }) {
   const l = useLedger();
@@ -76,13 +82,24 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
   const withReceipt = new Set(l.state.receipts?.map((r) => r.tx_id));
   const talk = new Map<number, number>();
   for (const c of l.state.comments ?? []) talk.set(c.tx_id, (talk.get(c.tx_id) ?? 0) + 1);
+  // Parts of one payment collapse into the row of the first part shown; a trip page lists only its own part.
+  const seen = new Set<string>();
+  const rows = txs.flatMap((tx) => {
+    const g = paymentGroup(tx);
+    if (!g) return [{ tx, parts: [tx] }];
+    if (seen.has(g)) return [];
+    seen.add(g);
+    return [{ tx, parts: txs.filter((t) => paymentGroup(t) === g) }];
+  });
   return (
     <div className="txlist" data-testid="tx-list">
-      {txs.map((tx) => {
-        const mine = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l, as);
-        const trip = tx.trip_id != null ? l.trips.get(tx.trip_id) : null;
+      {rows.map(({ tx, parts }) => {
+        const one = l.readOnly && l.state.shared_person_id == null ? null : myImpact(tx, l, as);
+        const mine = one && { ...one, amount: parts.reduce((sum, p) => sum + (myImpact(p, l, as)?.amount ?? 0), 0) };
+        const amount = parts.reduce((sum, p) => sum + p.amount, 0);
+        const where = parts.length > 1 ? parts.map((p) => (p.trip_id != null ? l.trips.get(p.trip_id)?.name : 'personal')).join(' + ') : tx.trip_id != null ? l.trips.get(tx.trip_id)?.name : null;
         const by = !l.readOnly && tx.added_by != null && tx.added_by !== l.me.id ? `by ${l.who(tx.added_by)}` : null;
-        const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, showTrip && trip?.name, by].filter(Boolean).join(' · ');
+        const meta = [fmtShort(tx.date), txWho(tx, l), tx.category, (showTrip || parts.length > 1) && where, by].filter(Boolean).join(' · ');
         return (
           <button type="button" key={tx.id} className="txrow" onClick={() => onSelect(tx)} data-testid={`tx-row-${tx.id}`}>
             <TypeIcon type={tx.type} category={tx.category} />
@@ -92,7 +109,7 @@ export function TxList({ txs, onSelect, showTrip = true, as }: { txs: Tx[]; onSe
               {mine && <span className={`impact ${mine.amount > 0 ? 'pos' : mine.amount < 0 ? 'neg' : ''}`}><Money amount={mine.amount} currency={mine.currency} sign /> · {mine.label}</span>}
             </span>
             <span className="amt">
-              <span className="amount"><Money amount={tx.amount} currency={tx.currency} /></span>
+              <span className="amount"><Money amount={amount} currency={tx.currency} /></span>
               {!mine && (tx.type === 'transfer' || tx.type === 'withdrawal') && <span className="sub faint">not spending</span>}
             </span>
           </button>
